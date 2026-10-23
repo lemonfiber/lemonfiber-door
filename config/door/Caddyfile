@@ -17,8 +17,19 @@
 # Jellyfin will not serve from where the request came from, and 502 or 504
 # where Jellyfin does not answer. A picture Jellyfin finds by a name rather than
 # an id, and its splash screen, are refused, since no question about an item
-# covers them. Every other path goes to Jellyfin unchanged, and Jellyfin holds
-# the member to their policy there itself.
+# covers them.
+#
+# A live stream's file, under /LiveTv/LiveStreamFiles/, is no item, and Jellyfin
+# serves it without asking who is there. Before one goes on, the door asks the
+# pass service, `GET /pass` at 10.80.96.34:8090 on the network it shares with
+# the pass service alone, naming the request as it came in `X-Forwarded-Uri`.
+# The pass travels in the request's `lfpass` parameter, once and in that
+# spelling, and the pass service confirms it for exactly the live stream the
+# path names. A 2xx passes the request on without its `lfpass`. Any other
+# answer, or none, is refused with 403. The door holds no key.
+#
+# Every other path goes to Jellyfin unchanged, and Jellyfin holds the member to
+# their policy there itself.
 #
 # The paths below are Jellyfin's routes at its root, and under /emby and
 # /mediabrowser, which Jellyfin strips and serves the same. Jellyfin here carries
@@ -31,9 +42,10 @@
 	servers {
 		# Only TCP is published, so there is no HTTP/3 listener to offer.
 		protocols h1 h2
-		# The proxy's fixed address on the `door` network, and no other, may
-		# say which client a request came from (compose/proxy.yml). Anybody
-		# else's X-Forwarded-For is ignored, and the client is who connected.
+		# The proxy's fixed address on the network of the door's ask of the
+		# proxy, and no other, may say which client a request came from.
+		# Anybody else's X-Forwarded-For is ignored, and the client is who
+		# connected.
 		trusted_proxies static 10.80.96.3
 		trusted_proxies_strict
 		client_ip_headers X-Forwarded-For
@@ -59,12 +71,6 @@
 	# `Bearer` can reach the header's other fields.
 	request_header Authorization "^(?i:bearer) ([0-9a-f]{32})$" "MediaBrowser Token=\"${1}\""
 
-	# An item id is 32 hexadecimal digits, with or without the dashes Jellyfin
-	# also accepts, and only those digits reach the question's path.
-	#
-	# Everything Jellyfin serves under /Videos/{id}/ and /Audio/{id}/ (streams,
-	# HLS playlists and segments, subtitles, attachments, trickplay, lyrics) and
-	# the two live-TV file routes.
 	# The guard decides on the path Caddy has cleaned and decoded, but reverse_proxy
 	# forwards the request's own bytes, and Jellyfin decodes, folds case and collapses
 	# them again its own way. A path that normalises to one route here and another
@@ -114,7 +120,7 @@
 	# On the guarded byte routes, a `LiveStreamId`. Jellyfin serves the bytes of the
 	# live stream that id names, not of the item in the path the question asks about,
 	# so an id for a stream opened on another item would hand its bytes out under this
-	# one. Live TV through the door is a feature of its own, not these file routes.
+	# one. A live stream's bytes go out only on its own file route, with a pass, below.
 	@live_stream_on_bytes expression `{http.request.orig_uri}.matches("(?i)^[^?]*/(?:emby/|mediabrowser/)?(?:Videos|Audio|LiveTv/LiveStreamFiles|LiveTv/LiveRecordings|Items/[^/?]+/(?:Images|Download|File))(?:/|%|[?]|$)") && {http.request.uri.query}.matches("(?i)(^|&)livestreamid=")`
 
 	# On the guarded byte routes, an `itemId` in the query, in any case. Jellyfin's
@@ -152,12 +158,32 @@
 		expression `{http.request.uri.query}.matches("(^|&)[A-Za-z0-9_.-]*[^A-Za-z0-9_.=&-]") || {http.request.uri.query}.matches("(?i)(^|&)mediasourceid(=|&|$)") && !({http.request.uri.query}.matches("^(.*&)?MediaSourceId=[0-9a-f]{32}(&.*)?$") && !{http.request.uri.query}.matches("(?i)(^|&)mediasourceid(=|&|$).*&mediasourceid(=|&|$)"))`
 	}
 
+	# On a live stream's file, the pass under another spelling than `lfpass`, given
+	# twice, or given empty. The pass service reads that one spelling once, and the door
+	# takes only it off before Jellyfin, so the pass travels in one place in one spelling.
+	# A parameter name holding anything but ASCII letters, digits, `_`, `-` and `.` is
+	# already refused above.
+	@pass_unreadable {
+		path_regexp (?i)^(?:/emby|/mediabrowser)?/LiveTv/LiveStreamFiles(?:/|$)
+		expression `{http.request.uri.query}.matches("(?i)(^|&)lfpass(=|&|$)") && !({http.request.uri.query}.matches("^(.*&)?lfpass=[^&]+(&.*)?$") && !{http.request.uri.query}.matches("(?i)(^|&)lfpass(=|&|$).*&lfpass(=|&|$)"))`
+	}
+
 	@trickplay_source {
 		path_regexp trickplay (?i)^(?:/emby|/mediabrowser)?/Videos/([0-9a-f]{8}-?[0-9a-f]{4}-?[0-9a-f]{4}-?[0-9a-f]{4}-?[0-9a-f]{12})/Trickplay(?:/|$)
 		expression `{http.request.uri.query}.matches("(?i)(^|&)mediasourceid(=|&|$)")`
 	}
 
-	@keyed path_regexp keyed (?i)^(?:/emby|/mediabrowser)?/(?:Videos|Audio|LiveTv/LiveStreamFiles|LiveTv/LiveRecordings)/([0-9a-f]{8}-?[0-9a-f]{4}-?[0-9a-f]{4}-?[0-9a-f]{4}-?[0-9a-f]{12})(?:/|$)
+	# A live stream's file, whatever it names. The pass service says whether the path
+	# names a live stream at all, and which.
+	@live_stream path_regexp (?i)^(?:/emby|/mediabrowser)?/LiveTv/LiveStreamFiles(?:/|$)
+
+	# An item id is 32 hexadecimal digits, with or without the dashes Jellyfin
+	# also accepts, and only those digits reach the question's path.
+	#
+	# Everything Jellyfin serves under /Videos/{id}/ and /Audio/{id}/ (streams,
+	# HLS playlists and segments, subtitles, attachments, trickplay, lyrics), and
+	# a live-TV recording's file, which is an item.
+	@keyed path_regexp keyed (?i)^(?:/emby|/mediabrowser)?/(?:Videos|Audio|LiveTv/LiveRecordings)/([0-9a-f]{8}-?[0-9a-f]{4}-?[0-9a-f]{4}-?[0-9a-f]{4}-?[0-9a-f]{12})(?:/|$)
 
 	# An item's images, and the item's file itself.
 	@owned path_regexp owned (?i)^(?:/emby|/mediabrowser)?/Items/([0-9a-f]{8}-?[0-9a-f]{4}-?[0-9a-f]{4}-?[0-9a-f]{4}-?[0-9a-f]{12})/(?:Images|Download|File)(?:/|$)
@@ -167,7 +193,7 @@
 	# is refused rather than passed. Two routes under /Videos name no item and
 	# stay open; Jellyfin requires a session for both.
 	@unkeyed {
-		path_regexp (?i)^(?:/emby|/mediabrowser)?/(?:(?:Videos|Audio|LiveTv/LiveStreamFiles|LiveTv/LiveRecordings)/[^/]|Items/[^/]+/(?:Images|Download|File)(?:/|$))
+		path_regexp (?i)^(?:/emby|/mediabrowser)?/(?:(?:Videos|Audio|LiveTv/LiveRecordings)/[^/]|Items/[^/]+/(?:Images|Download|File)(?:/|$))
 		not path_regexp (?i)^(?:/emby|/mediabrowser)?/Videos/(?:ActiveEncodings|MergeVersions)$
 	}
 
@@ -209,6 +235,25 @@
 
 	handle @trickplay_source_unaskable {
 		respond 403
+	}
+
+	handle @pass_unreadable {
+		respond 403
+	}
+
+	handle @live_stream {
+		uri query -lfpass
+		forward_auth 10.80.96.34:8090 {
+			uri /pass
+			header_up X-Forwarded-Uri {http.request.orig_uri}
+			handle_response {
+				respond 403
+			}
+			import bounded
+		}
+		reverse_proxy jellyfin:8096 {
+			import client
+		}
 	}
 
 	handle @trickplay_source {
@@ -254,6 +299,14 @@
 			import client
 		}
 	}
+
+	# The pass service unreached or silent is a refusal like any other answer but a yes.
+	handle_errors {
+		@pass_unanswered expression `{http.reverse_proxy.upstream.hostport} == "10.80.96.34:8090"`
+		handle @pass_unanswered {
+			respond 403
+		}
+	}
 }
 
 # How the question is put. The request's headers carry over, a token among them;
@@ -269,6 +322,11 @@
 	header_up -If-None-Match
 	header_up -If-Modified-Since
 	header_up -If-Unmodified-Since
+	import bounded
+}
+
+# How long a question may take to connect, and to be answered.
+(bounded) {
 	transport http {
 		dial_timeout 5s
 		response_header_timeout 15s
