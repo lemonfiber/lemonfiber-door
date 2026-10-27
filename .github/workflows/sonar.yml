@@ -1,4 +1,5 @@
-# The SonarCloud issue gate (Q-R64). A bundled part holds no code a scan reads.
+# Gate pull requests on zero SonarCloud issues (Q-R64). The scan is
+# SonarCloud's Automatic Analysis; the shared gate reads its summary.
 name: sonar
 on:
   pull_request:
@@ -15,6 +16,5 @@ jobs:
     uses: lemonfiber/spec/.github/workflows/sonar-gate.yml@240e7bd6f1cea7e41588cd0d1af0fdc2e9ca9785 # v1.0.118
     with:
       allowed-open: 0
-      code: false
     secrets:
       sonar-token: ${{ secrets.SONAR_TOKEN }}

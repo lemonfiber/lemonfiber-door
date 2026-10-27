@@ -2,13 +2,14 @@
 #
 #   gates     gates / gates
 #   pin-only  pin-only / pin-only
+#   rust      fmt, clippy, test, coverage, deny, msrv
 #   image     image / what changed, image / posture
-#   codeql    analyze, alerts / alerts
+#   codeql    analyze (actions), analyze (rust), alerts / alerts
 #   sonar     gate / gate
 name: awaiting-maintainer
 on:
   workflow_run:
-    workflows: [gates, pin-only, image, codeql, sonar]
+    workflows: [gates, pin-only, rust, image, codeql, sonar]
     types: [completed]
   pull_request_review:
     types: [submitted]

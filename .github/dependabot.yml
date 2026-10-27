@@ -1,5 +1,41 @@
+# Not configured here, deliberately:
+#
+#   The recorded responses in `recordings/` and `conformance/` are a recording
+#   of another project's HTTP replies, not a dependency. Nothing resolves them
+#   and nothing has a version to bump.
+#
+#   The image `plugin.toml` names is pinned by digest and is not a dependency
+#   either — moving it is an author's decision about what this plugin installs
+#   on somebody's machine, made with the proofs re-recorded against the new
+#   image. A bot that moved it would be changing what runs, unreviewed.
+#
+# So this covers what is: the adapter's crates, the images its Dockerfile builds
+# from, and the actions and reusable workflows CI runs. The core's crates are
+# pinned to the commit the release train moves, never by this updater.
 version: 2
 updates:
+  - package-ecosystem: cargo
+    directory: "/"
+    schedule:
+      interval: weekly
+    labels: ["dependencies"]
+    commit-message:
+      prefix: chore
+      include: scope
+    ignore:
+      - dependency-name: "lemonfiber-*"
+      # reqwest and the core's crates hold base64 0.22, and cargo-deny refuses a
+      # second line of it, so base64 moves to a new line when they do.
+      - dependency-name: "base64"
+        update-types: ["version-update:semver-minor", "version-update:semver-major"]
+      # hyper-util 0.1.21 takes base64 0.23 beside the 0.22 that reqwest and the
+      # core's crates hold, and cargo-deny refuses a second line of it, so
+      # hyper-util moves past 0.1.20 when they move to 0.23.
+      - dependency-name: "hyper-util"
+        versions: [">= 0.1.21"]
+    groups:
+      crates:
+        patterns: ["*"]
   - package-ecosystem: github-actions
     directory: "/"
     schedule:
@@ -22,12 +58,11 @@ updates:
   - package-ecosystem: docker
     directory: "/"
     schedule:
-      interval: monthly
-      time: "05:00"
-      timezone: Europe/Amsterdam
+      interval: weekly
     labels: ["dependencies"]
     commit-message:
       prefix: chore
       include: scope
-    cooldown:
-      default-days: 3
+    groups:
+      images:
+        patterns: ["*"]
