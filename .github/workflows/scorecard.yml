@@ -1,0 +1,19 @@
+# The supply-chain posture check (Q-R56, Q-R59), called from spec.
+name: scorecard
+on:
+  workflow_dispatch:
+  branch_protection_rule:
+  schedule:
+    - cron: "26 6 * * 1"
+permissions:
+  contents: read
+jobs:
+  scorecard:
+    permissions:
+      security-events: write
+      id-token: write
+      contents: read
+      actions: read
+    secrets:
+      SCORECARD_TOKEN: ${{ secrets.SCORECARD_TOKEN }}
+    uses: lemonfiber/spec/.github/workflows/scorecard.yml@240e7bd6f1cea7e41588cd0d1af0fdc2e9ca9785 # v1.0.118

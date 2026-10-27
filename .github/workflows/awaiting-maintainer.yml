@@ -1,0 +1,26 @@
+# The maintainer queue flag (OPS-R26, OPS-R27). The checks `main` requires:
+#
+#   gates     gates / gates
+#   pin-only  pin-only / pin-only
+#   image     image / what changed, image / posture
+#   codeql    analyze, alerts / alerts
+#   sonar     gate / gate
+name: awaiting-maintainer
+on:
+  workflow_run:
+    workflows: [gates, pin-only, image, codeql, sonar]
+    types: [completed]
+  pull_request_review:
+    types: [submitted]
+  pull_request_target:
+    types: [closed]
+permissions:
+  contents: read
+jobs:
+  awaiting:
+    permissions:
+      contents: read
+      pull-requests: write
+    uses: lemonfiber/spec/.github/workflows/awaiting-maintainer.yml@240e7bd6f1cea7e41588cd0d1af0fdc2e9ca9785 # v1.0.118
+    secrets:
+      DISCORD_MAINTAINERS_WEBHOOK: ${{ secrets.DISCORD_MAINTAINERS_WEBHOOK }}

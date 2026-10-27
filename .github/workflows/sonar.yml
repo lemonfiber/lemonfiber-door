@@ -1,0 +1,20 @@
+# The SonarCloud issue gate (Q-R64). A bundled part holds no code a scan reads.
+name: sonar
+on:
+  pull_request:
+permissions:
+  contents: read
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
+  cancel-in-progress: true
+jobs:
+  gate:
+    permissions:
+      contents: read
+      pull-requests: write
+    uses: lemonfiber/spec/.github/workflows/sonar-gate.yml@240e7bd6f1cea7e41588cd0d1af0fdc2e9ca9785 # v1.0.118
+    with:
+      allowed-open: 0
+      code: false
+    secrets:
+      sonar-token: ${{ secrets.SONAR_TOKEN }}
