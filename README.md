@@ -13,7 +13,9 @@ adapter speaks lemonfiber's `stream.guard` contract for, and pins it by digest.
 | Path | What it is |
 | --- | --- |
 | `Dockerfile` | The image, from Caddy's own pinned by digest |
-| `config/door/Caddyfile` | The configuration the image starts with |
+
+The files it starts with are `plugin-door`'s, under `config/door/` there, written into
+its configuration directory when lemonfiber installs it.
 
 ## How it is published
 
