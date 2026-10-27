@@ -1,4 +1,4 @@
-//! The door's process, as one call: the envelope and certificate it holds, its plain
+//! The door's process, as one call: the envelope it keeps and the certificate it reads, its plain
 //! and encrypted household ports and its contract port, until it is stopped.
 
 use std::future::Future;
@@ -26,7 +26,8 @@ pub struct Ports {
     pub contract: SocketAddr,
 }
 
-/// Serve the door from what `config` holds on `ports` until `stopped` resolves, or until
+/// Serve the door from what `config` holds, read-only, and the envelope kept in `state`,
+/// on `ports` until `stopped` resolves, or until
 /// a port cannot be served, with why.
 ///
 /// # Errors
@@ -34,11 +35,12 @@ pub struct Ports {
 /// Where a port cannot be listened on, or the contract cannot be served.
 pub async fn run(
     config: &Path,
+    state: &Path,
     ports: Ports,
     stopped: impl Future<Output = ()> + Send,
 ) -> std::io::Result<()> {
     let certificates = Arc::new(Certificates::in_directory(config));
-    let holding = Arc::new(Holding::in_directory(config, Arc::clone(&certificates)));
+    let holding = Arc::new(Holding::in_directory(state, Arc::clone(&certificates)));
     let door = Arc::new(Door::new(Arc::clone(&holding)));
     let served = tls::served(certificates).map_err(std::io::Error::other)?;
     let plain = TcpListener::bind(ports.plain).await?;

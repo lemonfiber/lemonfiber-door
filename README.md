@@ -18,7 +18,9 @@ This repository builds `ghcr.io/lemonfiber/door`. You do not run it yourself:
 | `Dockerfile` | Its image, distroless and non-root |
 
 It serves the household on 8096, and on 8920 with the certificate lemonfiber writes
-into its configuration directory, and speaks `stream.guard@1` to lemonfiber on 8081.
+into its configuration directory, read-only to it, and speaks `stream.guard@1` to
+lemonfiber on 8081. The envelope lemonfiber applies is kept in `/state`, the one
+directory it writes.
 
 ## Checks
 

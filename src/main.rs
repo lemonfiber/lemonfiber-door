@@ -7,8 +7,11 @@ use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::path::Path;
 use std::process::ExitCode;
 
-/// Where the core writes what the door holds, inside its container.
+/// Where the core writes what the door reads, read-only inside its container.
 const CONFIG: &str = "/config";
+
+/// Where the door keeps the envelope the core applies, its one writable directory.
+const STATE: &str = "/state";
 
 /// Every address inside the container.
 const ANY: IpAddr = IpAddr::V4(Ipv4Addr::UNSPECIFIED);
@@ -39,7 +42,7 @@ async fn serve() -> ExitCode {
     let stopped = async {
         let _ = tokio::signal::ctrl_c().await;
     };
-    match lemonfiber_door::run(Path::new(CONFIG), ports, stopped).await {
+    match lemonfiber_door::run(Path::new(CONFIG), Path::new(STATE), ports, stopped).await {
         Ok(()) => ExitCode::SUCCESS,
         Err(why) => {
             eprintln!("door: {why}");

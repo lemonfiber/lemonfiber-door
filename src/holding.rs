@@ -1,6 +1,7 @@
 //! What the core applies over `stream.guard@1`, held: the envelope written whole into
-//! the configuration directory, by renaming a copy over it, readable by the door's user
-//! alone, and compiled into the rules every request is read against. A door that holds
+//! the door's state directory, apart from its read-only configuration, by renaming a copy
+//! over it, readable by the door's user alone, and compiled into the rules every request
+//! is read against. A door that holds
 //! none, or holds one it cannot compile, guards nothing and serves nothing.
 
 use std::path::{Path, PathBuf};
@@ -23,36 +24,36 @@ const OWNER_ONLY: u32 = 0o600;
 
 /// The envelope the door enforces, and the certificate it presents.
 pub(crate) struct Holding {
-    config: PathBuf,
+    state: PathBuf,
     rules: RwLock<Option<Arc<Rules>>>,
     writing: tokio::sync::Mutex<()>,
     certificates: Arc<Certificates>,
 }
 
 impl Holding {
-    /// What is kept in `config`, the envelope compiled where it can be.
-    pub(crate) fn in_directory(config: &Path, certificates: Arc<Certificates>) -> Self {
-        let rules = std::fs::read_to_string(config.join(ENVELOPE))
+    /// What is kept in `state`, the envelope compiled where it can be.
+    pub(crate) fn in_directory(state: &Path, certificates: Arc<Certificates>) -> Self {
+        let rules = std::fs::read_to_string(state.join(ENVELOPE))
             .ok()
             .and_then(|text| serde_json::from_str::<Guarded>(&text).ok())
             .and_then(|guarded| compiled(guarded).ok())
             .map(Arc::new);
         Self {
-            config: config.to_path_buf(),
+            state: state.to_path_buf(),
             rules: RwLock::new(rules),
             writing: tokio::sync::Mutex::new(()),
             certificates,
         }
     }
 
-    /// What `rules` enforce, held in `config` without being written there.
+    /// What `rules` enforce, held in `state` without being written there.
     #[cfg(test)]
-    pub(crate) fn enforcing(config: &Path, rules: Rules) -> Self {
+    pub(crate) fn enforcing(state: &Path, rules: Rules) -> Self {
         Self {
-            config: config.to_path_buf(),
+            state: state.to_path_buf(),
             rules: RwLock::new(Some(Arc::new(rules))),
             writing: tokio::sync::Mutex::new(()),
-            certificates: Arc::new(Certificates::in_directory(config)),
+            certificates: Arc::new(Certificates::in_directory(state)),
         }
     }
 
@@ -63,8 +64,8 @@ impl Holding {
 
     /// Write `guarded` to the envelope's file, whole, from a copy made afresh.
     async fn written(&self, guarded: Guarded) -> Result<(), Failure> {
-        let record = self.config.join(ENVELOPE);
-        let writing = self.config.join(format!("{ENVELOPE}.writing"));
+        let record = self.state.join(ENVELOPE);
+        let writing = self.state.join(format!("{ENVELOPE}.writing"));
         let done = tokio::task::spawn_blocking(move || {
             use std::io::Write as _;
             use std::os::unix::fs::OpenOptionsExt as _;

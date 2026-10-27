@@ -21,7 +21,7 @@ See the spec:
 | `target` | A request's target as it arrived, decoded once, and the normal form |
 | `rules` | The envelope compiled, and what it decides about one request |
 | `client` | Which client a request came from |
-| `holding` | The envelope the core applies, kept owner-only, and the certificate's digest |
+| `holding` | The envelope the core applies, kept owner-only under `/state`, and the certificate's digest |
 | `serving` | Asking the question or the pass service, and forwarding the target checked |
 | `listening` | The plain and encrypted ports, HTTP/1.1 with upgrades and HTTP/2 |
 | `tls` | The certificate the core writes, read again when it changes |
@@ -29,6 +29,8 @@ See the spec:
 
 ## The rules you cannot break
 
+- **It writes under `/state` alone.** `/config`, where the core writes its key and its
+  certificate, is read-only to it; the envelope it is applied is kept in `/state`.
 - **It fails closed.** Until the core applies an envelope it answers `503` to every
   household request, and an envelope it cannot compile is refused and never held.
 - **It reads the target as it arrived and forwards that target.** Every pattern is

@@ -129,19 +129,20 @@ pub(crate) fn presenting(presented: Presentation) -> Guarded {
     guarded(declared)
 }
 
+/// 128 random bits in lower-case hexadecimal, made afresh for each call.
+pub(crate) fn minted() -> String {
+    let mut bytes = [0_u8; 16];
+    let _ = ring::rand::SecureRandom::fill(&ring::rand::SystemRandom::new(), &mut bytes);
+    format!("{:032x}", u128::from_le_bytes(bytes))
+}
+
 /// A directory of its own for one test, removed after it.
 pub(crate) struct Scratch(std::path::PathBuf);
 
 impl Scratch {
     /// A new, empty one.
     pub(crate) fn new() -> Self {
-        let mut bytes = [0_u8; 16];
-        let _ = ring::rand::SecureRandom::fill(&ring::rand::SystemRandom::new(), &mut bytes);
-        let path = std::env::temp_dir().join(format!(
-            "door-{}-{:x}",
-            std::process::id(),
-            u128::from_le_bytes(bytes)
-        ));
+        let path = std::env::temp_dir().join(format!("door-{}-{}", std::process::id(), minted()));
         let _ = std::fs::create_dir_all(&path);
         Self(path)
     }
