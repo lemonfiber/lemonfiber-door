@@ -1,4 +1,4 @@
-# CodeQL analysis of the workflows, the only code a bundled part holds (Q-R53, Q-R80).
+# CodeQL static analysis of the Rust crate and the workflows (Q-R53).
 name: codeql
 on:
   push:
@@ -12,55 +12,32 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
   cancel-in-progress: true
 jobs:
-  scope:
-    name: what changed
-    if: github.event_name == 'pull_request'
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    outputs:
-      code: ${{ steps.diff.outputs.code }}
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-          fetch-depth: 0
-          filter: blob:none
-      - id: diff
-        env:
-          BASE: ${{ github.event.pull_request.base.sha }}
-        run: |
-          set -euo pipefail
-          if [ -z "${BASE}" ] || ! git cat-file -e "${BASE}^{commit}" 2>/dev/null; then
-            echo "code=true" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-          changed="$(git diff --no-renames --name-only "${BASE}" HEAD -- .github)"
-          if [ -n "${changed}" ]; then
-            echo "code=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "code=false" >> "$GITHUB_OUTPUT"
-          fi
-
   analyze:
-    needs: scope
-    if: ${{ !cancelled() && (needs.scope.result != 'success' || needs.scope.outputs.code != 'false') }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
       security-events: write
+    strategy:
+      fail-fast: false
+      matrix:
+        language: [actions, rust]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       - uses: github/codeql-action/init@9b3254085494b55a0f7c4c2b3d2d52cc712ce370 # v3
         with:
-          languages: actions
+          languages: ${{ matrix.language }}
+      - uses: github/codeql-action/autobuild@9b3254085494b55a0f7c4c2b3d2d52cc712ce370 # v3
+        if: matrix.language == 'rust'
       - uses: github/codeql-action/analyze@9b3254085494b55a0f7c4c2b3d2d52cc712ce370 # v3
         with:
-          category: "/language:actions"
+          category: "/language:${{ matrix.language }}"
 
+  # Runs after a failed analysis too: the gate refuses a commit it has no
+  # analysis of, where a skipped required check would pass.
   alerts:
-    needs: [scope, analyze]
+    needs: analyze
     if: ${{ !cancelled() }}
     permissions:
       contents: read
@@ -68,4 +45,3 @@ jobs:
     uses: lemonfiber/spec/.github/workflows/codeql-alerts.yml@a3a5049ee28c2261cc6728db8b48fdf1083b4eca # v1.0.119
     with:
       analysis: ${{ needs.analyze.result }}
-      code: ${{ needs.scope.result != 'success' || needs.scope.outputs.code != 'false' }}

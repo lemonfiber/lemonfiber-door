@@ -1,5 +1,16 @@
-FROM caddy:2.11.7@sha256:504a44d7d74bd2bc28a66afc4774912fc21223ca8a67734af1c54ab2f999b489
-RUN apk add --no-cache libcap \
- && setcap -r /usr/bin/caddy \
- && apk del --no-cache libcap
-USER 1000:1000
+# The guarded door's image: built from this repository, distroless, non-root, with no
+# shell and no package manager.
+
+FROM rust:1.99.1-alpine3.22@sha256:731f64e16c12af70970d9a3655eecb1eecab4898352f09688a8e5ca2ab8b77c5 AS build
+RUN apk add --no-cache musl-dev
+WORKDIR /src
+COPY Cargo.toml Cargo.lock ./
+COPY src ./src
+RUN cargo build --release --locked --bin door \
+    && cp target/release/door /door
+
+FROM gcr.io/distroless/static-debian12:nonroot@sha256:afa5c872c891853ca7fcf1f12c3edb23f7eeef36189728842dd51042ff57f7ab
+COPY --from=build /door /door
+USER nonroot:nonroot
+EXPOSE 8096 8920 8081
+ENTRYPOINT ["/door"]
