@@ -24,15 +24,10 @@ updates:
       include: scope
     ignore:
       - dependency-name: "lemonfiber-*"
-      # reqwest and the core's crates hold base64 0.22, and cargo-deny refuses a
+      # reqwest and the core's crates hold base64 0.23, and cargo-deny refuses a
       # second line of it, so base64 moves to a new line when they do.
       - dependency-name: "base64"
         update-types: ["version-update:semver-minor", "version-update:semver-major"]
-      # hyper-util 0.1.21 takes base64 0.23 beside the 0.22 that reqwest and the
-      # core's crates hold, and cargo-deny refuses a second line of it, so
-      # hyper-util moves past 0.1.20 when they move to 0.23.
-      - dependency-name: "hyper-util"
-        versions: [">= 0.1.21"]
     groups:
       crates:
         patterns: ["*"]
