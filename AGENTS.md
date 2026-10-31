@@ -19,7 +19,7 @@ See the spec:
 | Module | What it holds |
 | --- | --- |
 | `target` | A request's target as it arrived, decoded once, and the normal form |
-| `rules` | The envelope compiled, and what it decides about one request |
+| `rules` | The envelope compiled, what it decides about one request, the token it reads, and the question it asks |
 | `client` | Which client a request came from |
 | `holding` | The envelope the core applies, kept owner-only under `/state`, and the certificate's digest |
 | `serving` | Asking the question or the pass service, and forwarding the target checked |
@@ -41,8 +41,30 @@ See the spec:
   envelope; nothing here knows Jellyfin.
 - **It believes `X-Forwarded-For` from the envelope's `proxy` alone**, takes that
   proxy's rightmost entry, and tells the media server that one client.
-- **A request presents a member's token once**: two `Authorization` headers, or a
-  bearer token beside a declared token parameter, are refused.
+- **A request carries one member's token**: it is read from the bearer header, the
+  header it is presented in, each token parameter and each token header the declaration
+  names; the same token in several of them is one token, and different tokens, one place
+  carrying a token twice, another spelling and another shape are refused. A value in the
+  presentation header its template does not hold is no token where the question goes to
+  the media server, and refused where it goes to the adapter.
+- **An item found in a query value is read decoded once**: the parameter carried once
+  under its declared spelling, its value matched whole, holding no `+`, no `%` once
+  decoded, no dot segment, doubled slash, `;`, backslash, fragment or control character,
+  and the item made of unreserved bytes.
+- **A question answers only for reading**: a request on a byte or live-stream path that
+  is asked about, with any method but `GET` and `HEAD`, is refused.
+- **Every query parameter the token reaches the media server in counts**, the one it is
+  presented in among them, and a token in one holding `%` or `+` is refused.
+- **The adapter is asked in the byte path's space**: `may?space={space}&item={item}`, and
+  a byte path naming no space is never asked about there.
+- **A question is built from parsed parts**: its scheme and host are those the envelope
+  names, its target a path from the root; every item and space is made of plain bytes,
+  every token put in a query is percent-encoded, and every pattern is anchored here,
+  whatever the declaration writes, so nothing a request carries adds a parameter, a
+  segment or a host to what is asked.
+- **A question to the adapter carries the member's token alone**, presented as the
+  declaration presents it to the media server, and no other header the request carried;
+  a request carrying an `Authorization` header that is not that token is refused.
 - **No `unwrap`, `expect`, `panic` or indexing** outside tests. The lints in
   `Cargo.toml` are the core's, and every line the tests can reach is reached.
 - **Every base image is pinned by tag and digest** (ADR-0025).

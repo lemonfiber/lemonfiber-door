@@ -7,6 +7,7 @@ use std::time::Duration;
 
 use bytes::Bytes;
 use http::header::{self, HeaderMap, HeaderName, HeaderValue};
+use http::uri::PathAndQuery;
 use http::{Method, Request, Response, StatusCode, Uri, Version};
 use http_body_util::combinators::BoxBody;
 use http_body_util::{BodyExt, Empty};
@@ -18,7 +19,7 @@ use hyper_util::rt::{TokioExecutor, TokioIo};
 
 use crate::client;
 use crate::holding::Holding;
-use crate::rules::{self, Check, Decision, Going, Presenting, REFUSED};
+use crate::rules::{self, Carrying, Check, Decision, Going, Presenting, REFUSED};
 
 /// What the door answers with.
 pub(crate) type Body = BoxBody<Bytes, hyper::Error>;
@@ -125,7 +126,18 @@ impl Door {
             .iter()
             .map(HeaderValue::as_bytes)
             .collect();
-        let going = match rules.decide(&raw, &authorization) {
+        let named: Vec<&str> = rules.token_headers().collect();
+        let headers: Vec<(&str, &[u8])> = request
+            .headers()
+            .iter()
+            .filter(|(name, _)| {
+                named
+                    .iter()
+                    .any(|one| name.as_str().eq_ignore_ascii_case(one))
+            })
+            .map(|(name, value)| (name.as_str(), value.as_bytes()))
+            .collect();
+        let going = match rules.decide(request.method().as_str(), &raw, &authorization, &headers) {
             Decision::Refuse(refused) => return status(refused),
             Decision::Forward(going) => going,
         };
@@ -146,7 +158,19 @@ impl Door {
                 method,
                 asked,
                 answers,
-            } => self.asked(to, *method, asked, answers, &headers).await,
+                carrying,
+            } => {
+                let question = Question {
+                    to,
+                    method: *method,
+                    asked,
+                    answers,
+                };
+                match carried(carrying, &headers) {
+                    Some(carried) => self.asked(&question, carried).await,
+                    None => Err(REFUSED),
+                }
+            }
             Check::Pass { at } => self.passed(at, &raw).await,
         };
         if let Err(refused) = checked {
@@ -156,33 +180,20 @@ impl Door {
             .await
     }
 
-    /// Whether the question, asked about each item in turn, says the member may have
-    /// every one of them; the status the request is refused with where not.
-    async fn asked(
-        &self,
-        to: &str,
-        method: lemonfiber_ports::http::Method,
-        asked: &[String],
-        answers: &lemonfiber_ports::service::Answers,
-        headers: &HeaderMap,
-    ) -> Result<(), u16> {
-        let mut question = headers.clone();
-        for conditional in CONDITIONAL {
-            question.remove(conditional);
-        }
-        question.remove(header::CONTENT_LENGTH);
-        question.remove(header::CONTENT_TYPE);
-        question.insert(header::ACCEPT, HeaderValue::from_static("application/json"));
-        for one in asked {
+    /// Whether `question`, asked about each item in turn carrying `carried`, says the
+    /// member may have every one of them; the status the request is refused with where
+    /// not.
+    async fn asked(&self, question: &Question<'_>, carried: HeaderMap) -> Result<(), u16> {
+        for one in question.asked {
             let mut request = Request::new(Empty::new());
-            *request.method_mut() = verb(method);
-            *request.uri_mut() = uri(to, one).ok_or(UNREACHED)?;
-            *request.headers_mut() = question.clone();
+            *request.method_mut() = verb(question.method);
+            *request.uri_mut() = uri(question.to, one).ok_or(UNREACHED)?;
+            *request.headers_mut() = carried.clone();
             let answer = tokio::time::timeout(self.answering, self.asking.request(request))
                 .await
                 .map_err(|_| UNANSWERED)?
                 .map_err(|_| UNREACHED)?;
-            rules::answered(answers, answer.status().as_u16())?;
+            rules::answered(question.answers, answer.status().as_u16())?;
         }
         Ok(())
     }
@@ -257,6 +268,48 @@ async fn joined(downstream: OnUpgrade, upstream: OnUpgrade) -> std::io::Result<(
     tokio::io::copy_bidirectional(&mut TokioIo::new(down), &mut TokioIo::new(up)).await
 }
 
+/// A question a request is checked with, as its rules say.
+struct Question<'a> {
+    /// Where it is sent.
+    to: &'a str,
+    /// Its method.
+    method: lemonfiber_ports::http::Method,
+    /// The path and query of the question about each item, in order.
+    asked: &'a [String],
+    /// What each answer means.
+    answers: &'a lemonfiber_ports::service::Answers,
+}
+
+/// The headers a question carries, as `carrying` says: `headers`, the request's as the
+/// media server is sent them, but those that make an answer anything but a yes or a no;
+/// or the member's token alone. Either asks for JSON. Nothing where the token cannot be
+/// written as a header.
+fn carried(carrying: &Carrying, headers: &HeaderMap) -> Option<HeaderMap> {
+    let mut question = match carrying {
+        Carrying::Request => {
+            let mut question = headers.clone();
+            for conditional in CONDITIONAL {
+                question.remove(conditional);
+            }
+            question.remove(header::CONTENT_LENGTH);
+            question.remove(header::CONTENT_TYPE);
+            question
+        }
+        Carrying::Token(token) => {
+            let mut question = HeaderMap::new();
+            if let Some((name, value)) = token {
+                question.insert(
+                    HeaderName::from_bytes(name.as_bytes()).ok()?,
+                    HeaderValue::from_str(value).ok()?,
+                );
+            }
+            question
+        }
+    };
+    question.insert(header::ACCEPT, HeaderValue::from_static("application/json"));
+    Some(question)
+}
+
 /// The headers a request goes on with: its own, but those of one connection and those
 /// the door writes, its token presented as `presenting` says, and `client` named as the
 /// whole of `X-Forwarded-For`; nothing where the token cannot be written as a header.
@@ -326,10 +379,18 @@ fn host<B>(request: &Request<B>) -> Option<HeaderValue> {
     })
 }
 
-/// `target` at `base`, a scheme, a host and a port.
+/// `target`, a path from the root and its query, at the scheme and authority `base`
+/// names, built from those parts so nothing in `target` can name another host; nothing
+/// where `base` names no scheme or authority, or `target` is not a path from the root.
 fn uri(base: &str, target: &str) -> Option<Uri> {
-    format!("{}{target}", base.trim_end_matches('/'))
-        .parse()
+    let base: Uri = base.parse().ok()?;
+    let origin = target.starts_with('/') && !target.starts_with("//") && !target.contains('#');
+    let path_and_query: PathAndQuery = origin.then(|| target.parse().ok()).flatten()?;
+    Uri::builder()
+        .scheme(base.scheme()?.clone())
+        .authority(base.authority()?.clone())
+        .path_and_query(path_and_query)
+        .build()
         .ok()
 }
 

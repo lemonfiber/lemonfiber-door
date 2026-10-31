@@ -112,7 +112,18 @@ pub(crate) fn normal(target: Target<'_>) -> Result<(), Abnormal> {
 /// `path` decoded once: every `%XX` the byte it names. A sequence that names no byte is
 /// left as it came, which the normal form has refused before this is read.
 pub(crate) fn decoded(path: &str) -> String {
-    let bytes = path.as_bytes();
+    String::from_utf8_lossy(&unescaped(path)).into_owned()
+}
+
+/// `value`, a query value, decoded once, where what it decodes to is text: every `%XX`
+/// the byte it names, and a sequence that names no byte left as it came.
+pub(crate) fn decoded_value(value: &str) -> Option<String> {
+    String::from_utf8(unescaped(value)).ok()
+}
+
+/// The bytes `text` names once every `%XX` in it is the byte it names.
+fn unescaped(text: &str) -> Vec<u8> {
+    let bytes = text.as_bytes();
     let mut out = Vec::with_capacity(bytes.len());
     let mut at = 0;
     while let Some(&byte) = bytes.get(at) {
@@ -127,7 +138,7 @@ pub(crate) fn decoded(path: &str) -> String {
             at += 1;
         }
     }
-    String::from_utf8_lossy(&out).into_owned()
+    out
 }
 
 /// Every `%` in `path` an escape of a byte that needs one, and none of a backslash.
@@ -159,7 +170,7 @@ fn hex(digit: u8) -> Option<u8> {
 }
 
 /// Whether `byte` is unreserved: a letter, a digit, `-`, `.`, `_` or `~`.
-const fn unreserved(byte: u8) -> bool {
+pub(crate) const fn unreserved(byte: u8) -> bool {
     byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'.' | b'_' | b'~')
 }
 

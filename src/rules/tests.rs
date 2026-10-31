@@ -1,7 +1,7 @@
 use lemonfiber_ports::http::Method;
 use lemonfiber_ports::service::{Addressee, Answers, Held, Naming, Presentation, Statuses};
 
-use super::{answered, Check, Decision, Going, Presenting, Rules, Uncompiled, REFUSED};
+use super::{answered, Carrying, Check, Decision, Going, Presenting, Rules, Uncompiled, REFUSED};
 use crate::fixtures::{self, ITEM, OTHER, PASS, TOKEN, UPSTREAM};
 
 fn jellyfin() -> Rules {
@@ -11,12 +11,12 @@ fn jellyfin() -> Rules {
 }
 
 fn decided(raw: &str) -> Decision {
-    jellyfin().decide(raw, &[])
+    jellyfin().decide("GET", raw, &[], &[])
 }
 
 fn bearing(raw: &str, authorization: &[&str]) -> Decision {
     let headers: Vec<&[u8]> = authorization.iter().map(|one| one.as_bytes()).collect();
-    jellyfin().decide(raw, &headers)
+    jellyfin().decide("GET", raw, &headers, &[])
 }
 
 fn question(asked: &[&str]) -> Check {
@@ -28,6 +28,7 @@ fn question(asked: &[&str]) -> Check {
             || unreachable!("the fixture asks"),
             |question| question.answers,
         ),
+        carrying: Carrying::Request,
     }
 }
 
@@ -227,7 +228,7 @@ fn a_token_parameter_twice_under_another_spelling_or_in_another_shape_is_refused
     for query in [
         format!("API_KEY={TOKEN}"),
         format!("apikey={TOKEN}"),
-        format!("ApiKey={TOKEN}&api_key={TOKEN}"),
+        format!("ApiKey={TOKEN}&api_key={OTHER}"),
         format!("api_key={TOKEN}&api_key={TOKEN}"),
         "api_key=short".to_owned(),
         "api_key".to_owned(),
@@ -246,7 +247,7 @@ fn a_bearer_token_is_presented_as_the_declaration_says() {
     let presented = |presentation: Presentation, authorization: &str| {
         Rules::of(fixtures::presenting(presentation))
             .unwrap_or_else(|why| unreachable!("compiles: {why:?}"))
-            .decide(&raw, &[authorization.as_bytes()])
+            .decide("GET", &raw, &[authorization.as_bytes()], &[])
     };
     assert_eq!(
         presenting_of(bearing(&raw, &[&format!("Bearer {TOKEN}")])),
@@ -293,7 +294,7 @@ fn a_bearer_value_of_another_shape_or_another_scheme_is_left_as_it_came() {
     }
     let invalid: &[u8] = b"Bearer \xff";
     assert_eq!(
-        presenting_of(jellyfin().decide("/Users", &[invalid])),
+        presenting_of(jellyfin().decide("GET", "/Users", &[invalid], &[])),
         Presenting::Unchanged
     );
 }
@@ -310,7 +311,7 @@ fn a_request_presenting_a_token_more_than_once_is_refused() {
         Decision::Refuse(REFUSED)
     );
     assert_eq!(
-        bearing(&format!("/Users?ApiKey={TOKEN}"), &[&bearer]),
+        bearing(&format!("/Users?ApiKey={OTHER}"), &[&bearer]),
         Decision::Refuse(REFUSED)
     );
     assert_eq!(
@@ -381,20 +382,29 @@ fn the_question_goes_to_the_adapter_where_the_declaration_sends_it_there() {
     if let Some(question) = declared.question.as_mut() {
         question.to = Addressee::Adapter;
     }
+    for path in &mut declared.bytes {
+        path.space = Some("item".to_owned());
+    }
     let mut guarded = fixtures::guarded(declared.clone());
     let rules = Rules::of(guarded.clone()).unwrap_or_else(|why| unreachable!("{why:?}"));
     let raw = format!("/Videos/{ITEM}/stream");
-    assert_eq!(rules.decide(&raw, &[]), Decision::Refuse(REFUSED));
+    assert_eq!(
+        rules.decide("GET", &raw, &[], &[]),
+        Decision::Refuse(REFUSED)
+    );
     guarded.adapter = Some("http://jellyfin-adapter:8080".to_owned());
     let rules = Rules::of(guarded).unwrap_or_else(|why| unreachable!("{why:?}"));
-    let Check::Question { to, .. } = check_of(rules.decide(&raw, &[])) else {
+    let Check::Question { to, .. } = check_of(rules.decide("GET", &raw, &[], &[])) else {
         unreachable!("asks");
     };
     assert_eq!(to, "http://jellyfin-adapter:8080");
     declared.question = None;
     let rules =
         Rules::of(fixtures::guarded(declared)).unwrap_or_else(|why| unreachable!("{why:?}"));
-    assert_eq!(rules.decide(&raw, &[]), Decision::Refuse(REFUSED));
+    assert_eq!(
+        rules.decide("GET", &raw, &[], &[]),
+        Decision::Refuse(REFUSED)
+    );
 }
 
 #[test]
@@ -405,9 +415,12 @@ fn a_question_path_holding_a_query_takes_the_token_after_it() {
     }
     let rules =
         Rules::of(fixtures::guarded(declared)).unwrap_or_else(|why| unreachable!("{why:?}"));
-    let Check::Question { asked, .. } =
-        check_of(rules.decide(&format!("/Videos/{ITEM}/stream?ApiKey={TOKEN}"), &[]))
-    else {
+    let Check::Question { asked, .. } = check_of(rules.decide(
+        "GET",
+        &format!("/Videos/{ITEM}/stream?ApiKey={TOKEN}"),
+        &[],
+        &[],
+    )) else {
         unreachable!("asks");
     };
     assert_eq!(
@@ -502,3 +515,9 @@ fn a_pattern_that_does_not_compile_is_named_in_the_refusal() {
         "the pattern (x does not compile"
     );
 }
+
+mod adapter;
+mod differing;
+mod injecting;
+mod querying;
+mod tokens;

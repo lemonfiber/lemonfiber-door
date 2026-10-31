@@ -20,6 +20,7 @@ use hyper::body::Incoming;
 use hyper::service::service_fn;
 use hyper_util::rt::{TokioExecutor, TokioIo};
 use hyper_util::server::conn::auto::Builder;
+use lemonfiber_ports::service::MAY;
 use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
 use tokio::net::TcpListener;
 
@@ -197,7 +198,15 @@ async fn answered(
         Kind::MediaServer => {
             let item = target
                 .strip_prefix("/Items/")
-                .map(|rest| rest.split(['?', '/']).next().unwrap_or_default().to_owned());
+                .or_else(|| {
+                    target.strip_prefix(&MAY.replace("{space}", "item").replace("{item}", ""))
+                })
+                .map(|rest| {
+                    rest.split(['?', '/', '&'])
+                        .next()
+                        .unwrap_or_default()
+                        .to_owned()
+                });
             let status = item
                 .and_then(|item| fake.statuses.lock().ok()?.get(&item).copied())
                 .unwrap_or(200);
