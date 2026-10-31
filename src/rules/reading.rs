@@ -57,7 +57,7 @@ impl Rules {
             };
             let value = pair
                 .value
-                .filter(|value| self.token.is_match(value) && !value.contains(DECODED_OTHERWISE))?;
+                .filter(|value| self.shaped(value) && !value.contains(DECODED_OTHERWISE))?;
             if declared != pair.name || named.contains(&pair.name) {
                 return None;
             }
@@ -66,7 +66,7 @@ impl Rules {
         }
         let bearer = match authorization {
             [] => None,
-            [one] => bearer(one).filter(|value| self.token.is_match(value)),
+            [one] => bearer(one).filter(|value| self.shaped(value)),
             _ => return None,
         };
         tokens.extend(bearer);
@@ -76,7 +76,7 @@ impl Rules {
                 [one] => tokens.push(
                     std::str::from_utf8(one)
                         .ok()
-                        .filter(|value| self.token.is_match(value))?,
+                        .filter(|value| self.shaped(value))?,
                 ),
                 _ => return None,
             }
@@ -127,7 +127,16 @@ impl Rules {
             .ok()?
             .strip_prefix(before)?
             .strip_suffix(after)
-            .filter(|token| self.token.is_match(token))
+            .filter(|token| self.shaped(token))
+    }
+
+    /// Whether `value` is a token of the declared shape that every reader reads as one: no
+    /// comma a list of values is split at, and no space or other control a reader trims.
+    fn shaped(&self, value: &str) -> bool {
+        self.token.is_match(value)
+            && !value
+                .bytes()
+                .any(|byte| byte == b',' || byte.is_ascii_whitespace() || byte.is_ascii_control())
     }
 
     /// Every query parameter a member's token reaches the media server in: those the

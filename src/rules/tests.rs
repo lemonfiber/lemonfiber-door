@@ -519,5 +519,6 @@ fn a_pattern_that_does_not_compile_is_named_in_the_refusal() {
 mod adapter;
 mod differing;
 mod injecting;
+mod normalising;
 mod querying;
 mod tokens;

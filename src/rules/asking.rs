@@ -26,7 +26,11 @@ impl Rules {
         read: Read<'_>,
     ) -> Result<Check, u16> {
         let path = target.path;
-        if path.contains('%') || pairs.iter().any(|pair| !super::plain(pair.name)) {
+        let split_otherwise = target.query.is_some_and(|query| query.contains(';'));
+        if path.contains('%')
+            || split_otherwise
+            || pairs.iter().any(|pair| !super::plain(pair.name))
+        {
             return Err(REFUSED);
         }
         let item = match &bytes.query {

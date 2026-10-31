@@ -44,6 +44,9 @@ pub(crate) enum Abnormal {
     Character,
     /// A query parameter whose name holds a percent-encoding.
     EncodedName,
+    /// A segment ending in a dot or a space, which a server trimming either reads as
+    /// another segment.
+    Trimmed,
 }
 
 /// `raw` split into its path and query, where it is a path from the root carrying no
@@ -100,6 +103,12 @@ pub(crate) fn normal(target: Target<'_>) -> Result<(), Abnormal> {
         return Err(Abnormal::Character);
     }
     escapes(path)?;
+    if decoded(path)
+        .split('/')
+        .any(|segment| segment.ends_with(['.', ' ']))
+    {
+        return Err(Abnormal::Trimmed);
+    }
     if pairs(target.query)
         .iter()
         .any(|pair| pair.name.contains('%'))

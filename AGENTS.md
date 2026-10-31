@@ -62,6 +62,9 @@ See the spec:
   every token put in a query is percent-encoded, and every pattern is anchored here,
   whatever the declaration writes, so nothing a request carries adds a parameter, a
   segment or a host to what is asked.
+- **It reads a target as a lenient reader would**: a path segment ending in a dot or a
+  space is refused, every path pattern is matched without regard to case, a query on an
+  asked path holding `;` is refused, and a token holding a comma or a space is no token.
 - **A question to the adapter carries the member's token alone**, presented as the
   declaration presents it to the media server, and no other header the request carried;
   a request carrying an `Authorization` header that is not that token is refused.

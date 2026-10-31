@@ -176,7 +176,7 @@ impl Rules {
         let refused = declared
             .refused
             .iter()
-            .map(|pattern| compiled(pattern))
+            .map(|pattern| any_case(pattern))
             .collect::<Result<_, _>>()?;
         let bytes = declared
             .bytes
@@ -419,9 +419,15 @@ fn whole(pattern: &str) -> Result<Regex, Uncompiled> {
 }
 
 /// `pattern`, compiled within the bound a declaration is held to, to match only from the
-/// start of a path.
+/// start of a path and without regard to case, as a media server may route one.
 fn from_start(pattern: &str) -> Result<Regex, Uncompiled> {
-    bounded(&format!(r"\A(?:{pattern})"), pattern)
+    bounded_as(&format!(r"\A(?:{pattern})"), pattern, true)
+}
+
+/// `pattern`, a path pattern, compiled within the bound a declaration is held to, to match
+/// without regard to case, as a media server may route one.
+fn any_case(pattern: &str) -> Result<Regex, Uncompiled> {
+    bounded_as(pattern, pattern, true)
 }
 
 /// `value`, written into a query: every byte but an unreserved one percent-encoded, so it
@@ -437,16 +443,18 @@ fn encoded(value: &str) -> String {
     })
 }
 
-/// `pattern`, compiled within the bound a declaration is held to.
-fn compiled(pattern: &str) -> Result<Regex, Uncompiled> {
-    bounded(pattern, pattern)
-}
-
 /// `built`, compiled within the bound a declaration is held to; where it does not
 /// compile, the declared `pattern` named.
 fn bounded(built: &str, pattern: &str) -> Result<Regex, Uncompiled> {
+    bounded_as(built, pattern, false)
+}
+
+/// `built`, compiled as [`bounded`] compiles it, without regard to case where `any_case`
+/// says.
+fn bounded_as(built: &str, pattern: &str, any_case: bool) -> Result<Regex, Uncompiled> {
     RegexBuilder::new(built)
         .size_limit(COMPILED_MOST)
+        .case_insensitive(any_case)
         .build()
         .map_err(|_| Uncompiled(pattern.to_owned()))
 }
