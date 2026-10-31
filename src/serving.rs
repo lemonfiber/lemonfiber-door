@@ -120,15 +120,15 @@ impl Door {
             .uri()
             .path_and_query()
             .map_or_else(String::new, |target| target.as_str().to_owned());
-        let authorization: Vec<&[u8]> = request
-            .headers()
+        let mut passing = request.headers().clone();
+        stripped(&mut passing);
+        let authorization: Vec<&[u8]> = passing
             .get_all(header::AUTHORIZATION)
             .iter()
             .map(HeaderValue::as_bytes)
             .collect();
         let named: Vec<&str> = rules.token_headers().collect();
-        let headers: Vec<(&str, &[u8])> = request
-            .headers()
+        let headers: Vec<(&str, &[u8])> = passing
             .iter()
             .filter(|(name, _)| {
                 named
