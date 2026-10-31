@@ -2,14 +2,12 @@
 //!
 //! Every pattern is matched against the path as its bytes arrived and as it reads
 //! decoded once, and holds where either matches. A byte or live-stream path carries no
-//! `%` at all, so the item or the stream it names is the same in both.
+//! `%` at all, so the item or the stream it names is the same in both. An item found in
+//! a query value is read from that value decoded once, which then holds no `%`.
 
 use std::fmt::Write as _;
 
-use lemonfiber_ports::service::{
-    Addressee, Answers, Declared, Guarded, Held, Presentation, Question, Statuses, Token,
-    STREAM_NAME, TOKEN,
-};
+use lemonfiber_ports::service::{Answers, Declared, Guarded, Held, Statuses, STREAM_NAME};
 use regex::{Regex, RegexBuilder};
 
 use crate::target::{self, Pair, Target};
@@ -29,16 +27,40 @@ const COMPILED_MOST: usize = 1 << 20;
 /// The scheme a bearer token is presented under, matched without regard to case.
 const BEARER: &str = "bearer ";
 
+/// The scheme a bearer token is presented to the adapter under.
+const BEARING: &str = "Bearer ";
+
+/// The header a bearer token is presented in.
+const AUTHORIZATION: &str = "authorization";
+
 /// The status a request is refused with.
 pub(crate) const REFUSED: u16 = 403;
+
+/// The methods that read what a byte or live-stream path serves, the only ones a
+/// question about it answers for.
+const READING: [&str; 2] = ["GET", "HEAD"];
+
+/// The bytes a query value reads otherwise once decoded, which a token in one never
+/// holds.
+const DECODED_OTHERWISE: [char; 2] = ['%', '+'];
 
 /// A path that serves an item's bytes, compiled.
 #[derive(Debug)]
 struct Bytes {
     pattern: Regex,
+    query: Option<InQuery>,
+    space: Option<String>,
     item: Regex,
     exempt: Vec<Regex>,
     naming: Vec<(String, Naming)>,
+}
+
+/// The query parameter a byte path finds its item in, and the pattern its value, decoded
+/// once, matches whole, compiled.
+#[derive(Debug)]
+struct InQuery {
+    parameter: String,
+    pattern: Regex,
 }
 
 /// What a parameter naming another item is held to, compiled.
@@ -96,12 +118,24 @@ pub(crate) enum Check {
         asked: Vec<String>,
         /// What each answer means.
         answers: Answers,
+        /// What the question carries besides its path.
+        carrying: Carrying,
     },
     /// The pass service, whether the pass the request carries is good.
     Pass {
         /// Where it is asked.
         at: String,
     },
+}
+
+/// What a question carries besides its path.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum Carrying {
+    /// The request's own headers, as the media server is sent them.
+    Request,
+    /// The member's token alone, in this header where it is presented in one, and no
+    /// other header that could carry a credential.
+    Token(Option<(String, String)>),
 }
 
 /// A request that goes on, once its check says it may.
@@ -142,19 +176,30 @@ impl Rules {
         let refused = declared
             .refused
             .iter()
-            .map(|pattern| compiled(pattern))
+            .map(|pattern| any_case(pattern))
             .collect::<Result<_, _>>()?;
         let bytes = declared
             .bytes
             .iter()
             .map(|path| {
                 Ok(Bytes {
-                    pattern: compiled(&path.pattern)?,
-                    item: compiled(&path.item)?,
+                    pattern: from_start(&path.pattern)?,
+                    query: path
+                        .query
+                        .as_ref()
+                        .map(|query| {
+                            Ok(InQuery {
+                                parameter: query.parameter.clone(),
+                                pattern: whole(&query.pattern)?,
+                            })
+                        })
+                        .transpose()?,
+                    space: path.space.clone(),
+                    item: whole(&path.item)?,
                     exempt: path
                         .exempt
                         .iter()
-                        .map(|pattern| compiled(pattern))
+                        .map(|pattern| from_start(pattern))
                         .collect::<Result<_, _>>()?,
                     naming: path
                         .naming
@@ -164,7 +209,7 @@ impl Rules {
                                 naming.parameter.clone(),
                                 match &naming.held {
                                     Held::Refused => Naming::Refused,
-                                    Held::Asked { shape } => Naming::Asked(compiled(shape)?),
+                                    Held::Asked { shape } => Naming::Asked(whole(shape)?),
                                 },
                             ))
                         })
@@ -177,12 +222,12 @@ impl Rules {
             .iter()
             .map(|path| {
                 Ok(Live {
-                    pattern: compiled(&path.pattern)?,
-                    stream: compiled(&path.stream)?,
+                    pattern: from_start(&path.pattern)?,
+                    stream: whole(&path.stream)?,
                 })
             })
             .collect::<Result<_, Uncompiled>>()?;
-        let token = compiled(&declared.token.shape)?;
+        let token = whole(&declared.token.shape)?;
         Ok(Self {
             guarded,
             refused,
@@ -197,9 +242,16 @@ impl Rules {
         &self.guarded
     }
 
-    /// What `raw`, a request's target as its bytes arrived, carrying the `Authorization`
-    /// headers `authorization`, is.
-    pub(crate) fn decide(&self, raw: &str, authorization: &[&[u8]]) -> Decision {
+    /// What a request with `method` on `raw`, its target as its bytes arrived, carrying
+    /// the `Authorization` headers `authorization` and, of the headers
+    /// [`Self::token_headers`] names, `headers`, each with its name, is.
+    pub(crate) fn decide(
+        &self,
+        method: &str,
+        raw: &str,
+        authorization: &[&[u8]],
+        headers: &[(&str, &[u8])],
+    ) -> Decision {
         let Ok(target) = target::split(raw) else {
             return Decision::Refuse(REFUSED);
         };
@@ -208,15 +260,17 @@ impl Rules {
         }
         let decoded = target::decoded(target.path);
         let pairs = target::pairs(target.query);
-        let Some((bearer, presenting)) = self.presented(authorization, &pairs) else {
+        let Some((read, presenting)) = self.read(authorization, &pairs, headers) else {
             return Decision::Refuse(REFUSED);
         };
+        let bearer = read.bearer;
         let either = |pattern: &Regex| pattern.is_match(target.path) || pattern.is_match(&decoded);
         if self.refused.iter().any(either) {
             return Decision::Refuse(REFUSED);
         }
         let forwarded =
             |leaving: Option<&str>| forwarded(target, &pairs, leaving, self.put(bearer));
+        let reading = READING.contains(&method);
         if let Some(live) = self.live.iter().find(|live| either(&live.pattern)) {
             let naming_another = self
                 .bytes
@@ -228,7 +282,7 @@ impl Rules {
                         .iter()
                         .any(|pair| pair.name.eq_ignore_ascii_case(parameter))
                 });
-            if naming_another || !Self::passable(live, target, &pairs) {
+            if naming_another || !reading || !Self::passable(live, target, &pairs) {
                 return Decision::Refuse(REFUSED);
             }
             return Decision::Forward(Box::new(Going {
@@ -247,7 +301,10 @@ impl Rules {
                     check: Check::Nothing,
                 }));
             }
-            return match self.asked(bytes, target, &pairs, bearer) {
+            if !reading {
+                return Decision::Refuse(REFUSED);
+            }
+            return match self.asked(bytes, target, &pairs, read) {
                 Ok(check) => Decision::Forward(Box::new(Going {
                     target: forwarded(None),
                     presenting,
@@ -261,137 +318,6 @@ impl Rules {
             presenting,
             check: Check::Nothing,
         }))
-    }
-
-    /// The bearer token the request presents, where it presents one of the declared
-    /// shape, and how it is presented to the media server; nothing where the request
-    /// presents a token more than once, or a token parameter under another spelling,
-    /// twice or in another shape.
-    fn presented<'a>(
-        &self,
-        authorization: &[&'a [u8]],
-        pairs: &[Pair<'_>],
-    ) -> Option<(Option<&'a str>, Presenting)> {
-        let token: &Token = &self.guarded.declared.token;
-        let mut carried = 0;
-        for pair in pairs {
-            let Some(declared) = token
-                .parameters
-                .iter()
-                .find(|declared| declared.eq_ignore_ascii_case(pair.name))
-            else {
-                continue;
-            };
-            let shaped = pair.value.is_some_and(|value| self.token.is_match(value));
-            if declared != pair.name || !shaped {
-                return None;
-            }
-            carried += 1;
-        }
-        let bearer = match authorization {
-            [] => None,
-            [one] => bearer(one).filter(|value| self.token.is_match(value)),
-            _ => return None,
-        };
-        if carried > 1 || (carried == 1 && bearer.is_some()) {
-            return None;
-        }
-        let presenting = match (bearer, &token.presented) {
-            (None, _) | (Some(_), Presentation::AsIs) => Presenting::Unchanged,
-            (Some(value), Presentation::Header { name, value: shown }) => Presenting::Header {
-                name: name.clone(),
-                value: shown.replace(TOKEN, value),
-            },
-            (Some(_), Presentation::Query { .. }) => Presenting::Removed,
-        };
-        Some((bearer, presenting))
-    }
-
-    /// The query parameter a bearer token is put in, with it, where the declaration
-    /// presents a token in the query.
-    fn put<'a>(&'a self, bearer: Option<&'a str>) -> Option<(&'a str, &'a str)> {
-        match (&self.guarded.declared.token.presented, bearer) {
-            (Presentation::Query { parameter }, Some(value)) => Some((parameter.as_str(), value)),
-            _ => None,
-        }
-    }
-
-    /// The question a request on `bytes` is asked about, or the status it is refused
-    /// with.
-    fn asked(
-        &self,
-        bytes: &Bytes,
-        target: Target<'_>,
-        pairs: &[Pair<'_>],
-        bearer: Option<&str>,
-    ) -> Result<Check, u16> {
-        let path = target.path;
-        if path.contains('%') || pairs.iter().any(|pair| !plain(pair.name)) {
-            return Err(REFUSED);
-        }
-        let item = bytes
-            .pattern
-            .captures(path)
-            .and_then(|captured| captured.name(ITEM))
-            .map(|matched| matched.as_str())
-            .filter(|item| bytes.item.is_match(item))
-            .ok_or(REFUSED)?;
-        let mut items = vec![item];
-        for (parameter, naming) in &bytes.naming {
-            let named: Vec<&Pair<'_>> = pairs
-                .iter()
-                .filter(|pair| pair.name.eq_ignore_ascii_case(parameter))
-                .collect();
-            match (naming, named.as_slice()) {
-                (_, []) => {}
-                (Naming::Asked(shape), [pair])
-                    if pair.name == parameter
-                        && pair.value.is_some_and(|value| shape.is_match(value)) =>
-                {
-                    items.extend(pair.value);
-                }
-                _ => return Err(REFUSED),
-            }
-        }
-        let question: &Question = self.guarded.declared.question.as_ref().ok_or(REFUSED)?;
-        let to = match question.to {
-            Addressee::Upstream => self.guarded.upstream.clone(),
-            Addressee::Adapter => self.guarded.adapter.clone().ok_or(REFUSED)?,
-        };
-        let carried: Vec<&str> = pairs
-            .iter()
-            .filter(|pair| {
-                self.guarded
-                    .declared
-                    .token
-                    .parameters
-                    .iter()
-                    .any(|declared| declared == pair.name)
-            })
-            .map(|pair| pair.raw)
-            .collect();
-        let put = self.put(bearer);
-        let asked = items
-            .iter()
-            .map(|item| {
-                let mut asked = question.path.replace(ITEM_PLACE, item);
-                let mut joiner = if asked.contains('?') { '&' } else { '?' };
-                for raw in &carried {
-                    let _ = write!(asked, "{joiner}{raw}");
-                    joiner = '&';
-                }
-                if let Some((parameter, value)) = put {
-                    let _ = write!(asked, "{joiner}{parameter}={value}");
-                }
-                asked
-            })
-            .collect();
-        Ok(Check::Question {
-            to,
-            method: question.method,
-            asked,
-            answers: question.answers.clone(),
-        })
     }
 
     /// Whether a request on `live` names a live stream of its declared shape and carries
@@ -461,7 +387,7 @@ fn forwarded(
         .map(|pair| pair.raw.to_owned())
         .collect();
     if let Some((parameter, value)) = put {
-        kept.push(format!("{parameter}={value}"));
+        kept.push(format!("{parameter}={}", encoded(value)));
     }
     if kept.is_empty() {
         target.path.to_owned()
@@ -486,13 +412,55 @@ fn plain(name: &str) -> bool {
         .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-' | b'.'))
 }
 
-/// `pattern`, compiled within the bound a declaration is held to.
-fn compiled(pattern: &str) -> Result<Regex, Uncompiled> {
-    RegexBuilder::new(pattern)
+/// `pattern`, compiled within the bound a declaration is held to, to match only a whole
+/// value.
+fn whole(pattern: &str) -> Result<Regex, Uncompiled> {
+    bounded(&format!(r"\A(?:{pattern})\z"), pattern)
+}
+
+/// `pattern`, compiled within the bound a declaration is held to, to match only from the
+/// start of a path and without regard to case, as a media server may route one.
+fn from_start(pattern: &str) -> Result<Regex, Uncompiled> {
+    bounded_as(&format!(r"\A(?:{pattern})"), pattern, true)
+}
+
+/// `pattern`, a path pattern, compiled within the bound a declaration is held to, to match
+/// without regard to case, as a media server may route one.
+fn any_case(pattern: &str) -> Result<Regex, Uncompiled> {
+    bounded_as(pattern, pattern, true)
+}
+
+/// `value`, written into a query: every byte but an unreserved one percent-encoded, so it
+/// reads as one value and adds no parameter.
+fn encoded(value: &str) -> String {
+    value.bytes().fold(String::new(), |mut out, byte| {
+        if target::unreserved(byte) {
+            out.push(char::from(byte));
+        } else {
+            let _ = write!(out, "%{byte:02X}");
+        }
+        out
+    })
+}
+
+/// `built`, compiled within the bound a declaration is held to; where it does not
+/// compile, the declared `pattern` named.
+fn bounded(built: &str, pattern: &str) -> Result<Regex, Uncompiled> {
+    bounded_as(built, pattern, false)
+}
+
+/// `built`, compiled as [`bounded`] compiles it, without regard to case where `any_case`
+/// says.
+fn bounded_as(built: &str, pattern: &str, any_case: bool) -> Result<Regex, Uncompiled> {
+    RegexBuilder::new(built)
         .size_limit(COMPILED_MOST)
+        .case_insensitive(any_case)
         .build()
         .map_err(|_| Uncompiled(pattern.to_owned()))
 }
+
+mod asking;
+mod reading;
 
 #[cfg(test)]
 mod tests;

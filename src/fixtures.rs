@@ -43,6 +43,8 @@ fn refusing() -> Vec<Naming> {
 fn byte_path(route: &str, exempt: Vec<String>, naming: Vec<Naming>) -> BytePath {
     BytePath {
         pattern: format!("{PREFIXED}/{route}"),
+        query: None,
+        space: None,
         item: ITEM_ID.to_owned(),
         exempt,
         naming,
@@ -98,6 +100,7 @@ pub(crate) fn declared() -> Declared {
             },
             shape: HEX.to_owned(),
             parameters: vec!["ApiKey".to_owned(), "api_key".to_owned()],
+            headers: Vec::new(),
         },
         locations: Locations {
             stream: "{base}/Videos/{item}/master.m3u8".to_owned(),

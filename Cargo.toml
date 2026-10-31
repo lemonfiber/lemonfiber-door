@@ -21,9 +21,9 @@ http-body-util = "0.1"
 hyper = { version = "1", features = ["client", "server", "http1", "http2"] }
 hyper-util = { version = "0.1", default-features = false, features = ["client-legacy", "http1", "http2", "server-auto", "tokio"] }
 # The contract it speaks and the kit that serves it, from the core at a pinned commit.
-lemonfiber-adapter-kit = { git = "https://github.com/lemonfiber/lemonfiber", rev = "23d16d26f54af845163ff4b004be71bca3972939" }
-lemonfiber-contract = { git = "https://github.com/lemonfiber/lemonfiber", rev = "23d16d26f54af845163ff4b004be71bca3972939" }
-lemonfiber-ports = { git = "https://github.com/lemonfiber/lemonfiber", rev = "23d16d26f54af845163ff4b004be71bca3972939" }
+lemonfiber-adapter-kit = { git = "https://github.com/lemonfiber/lemonfiber", rev = "0d8245e1af6579fbc5b2e186c21597475b18dc0d" }
+lemonfiber-contract = { git = "https://github.com/lemonfiber/lemonfiber", rev = "0d8245e1af6579fbc5b2e186c21597475b18dc0d" }
+lemonfiber-ports = { git = "https://github.com/lemonfiber/lemonfiber", rev = "0d8245e1af6579fbc5b2e186c21597475b18dc0d" }
 regex = "1"
 ring = "0.17"
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }

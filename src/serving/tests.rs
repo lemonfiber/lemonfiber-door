@@ -2,7 +2,10 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
 
-use lemonfiber_ports::service::{Guarded, Guarding, Presentation};
+use lemonfiber_ports::http::Method;
+use lemonfiber_ports::service::{
+    Addressee, Answers, Guarded, Guarding, Presentation, Question, MAY,
+};
 use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
 use tokio::net::{TcpListener, TcpStream};
 
@@ -379,7 +382,7 @@ async fn a_request_presenting_a_token_twice_is_refused() {
     let bearer = format!("Authorization: Bearer {TOKEN}");
     assert_eq!(get(door.at, "/Users/Me", &[&bearer, &bearer]).await.0, 403);
     assert_eq!(
-        get(door.at, &format!("/Users/Me?ApiKey={TOKEN}"), &[&bearer])
+        get(door.at, &format!("/Users/Me?ApiKey={OTHER}"), &[&bearer])
             .await
             .0,
         403
@@ -543,4 +546,212 @@ async fn a_token_the_rules_cannot_write_as_a_header_is_refused() {
     let bearer = format!("Authorization: Bearer {TOKEN}");
     assert_eq!(get(door.at, "/web", &[&bearer]).await.0, 403);
     assert!(upstream.sent().is_empty());
+}
+
+#[tokio::test]
+async fn the_adapter_is_asked_carrying_the_member_token_and_nothing_else() {
+    let upstream = fake::media_server().await;
+    let adapter = fake::media_server().await;
+    let mut guarded = envelope(&upstream, "http://127.0.0.1:1/pass", "10.80.96.3");
+    guarded.adapter = Some(adapter.address());
+    for path in &mut guarded.declared.bytes {
+        path.space = Some("item".to_owned());
+    }
+    guarded.declared.question = Some(Question {
+        method: Method::Get,
+        path: MAY.to_owned(),
+        to: Addressee::Adapter,
+        answers: Answers::from_adapter(),
+    });
+    adapter.answer(ITEM, 204);
+    adapter.answer(OTHER, 404);
+    let door = running(Some(guarded), Duration::from_secs(1)).await;
+    let bearer = format!("Authorization: Bearer {TOKEN}");
+    let headers = [
+        bearer.as_str(),
+        "Cookie: session=1",
+        "X-Emby-Token: another",
+        "Range: bytes=0-",
+    ];
+    let target = format!("/Videos/{ITEM}/stream");
+    assert_eq!(get(door.at, &target, &headers).await.0, 200);
+    let refused = format!("/Videos/{OTHER}/stream");
+    assert_eq!(get(door.at, &refused, &headers).await.0, 404);
+    assert_eq!(get(door.at, &target, &["Cookie: session=1"]).await.0, 200);
+    let asked = adapter.sent();
+    let [question, _, tokenless] = asked.as_slice() else {
+        unreachable!("one question each: {asked:?}");
+    };
+    let mut unborne: Vec<&str> = tokenless.headers.keys().map(String::as_str).collect();
+    unborne.sort_unstable();
+    assert_eq!(unborne, ["accept", "host"]);
+    assert_eq!(
+        question.target,
+        MAY.replace("{space}", "item").replace("{item}", ITEM)
+    );
+    let mut carried: Vec<&str> = question.headers.keys().map(String::as_str).collect();
+    carried.sort_unstable();
+    assert_eq!(carried, ["accept", "authorization", "host"]);
+    assert_eq!(
+        question.header("authorization"),
+        vec![format!(r#"MediaBrowser Token="{TOKEN}""#)]
+    );
+    let forwarded = upstream.sent();
+    assert_eq!(
+        forwarded
+            .iter()
+            .map(|one| one.target.as_str())
+            .collect::<Vec<_>>(),
+        [target.as_str(), target.as_str()]
+    );
+}
+
+#[tokio::test]
+async fn a_token_the_adapter_question_cannot_carry_as_a_header_is_refused() {
+    for (name, value) in [("bad name", "{token}"), ("X-Token", "{token}\n")] {
+        let upstream = fake::media_server().await;
+        let adapter = fake::media_server().await;
+        let mut guarded = envelope(&upstream, "http://127.0.0.1:1/pass", "10.80.96.3");
+        guarded.adapter = Some(adapter.address());
+        for path in &mut guarded.declared.bytes {
+            path.space = Some("item".to_owned());
+        }
+        guarded.declared.question = Some(Question {
+            method: Method::Get,
+            path: MAY.to_owned(),
+            to: Addressee::Adapter,
+            answers: Answers::from_adapter(),
+        });
+        guarded.declared.token.presented = Presentation::Header {
+            name: name.to_owned(),
+            value: value.to_owned(),
+        };
+        let scratch = Scratch::new();
+        let rules = Rules::of(guarded).unwrap_or_else(|why| unreachable!("{why:?}"));
+        let door = serve(
+            Door::new(Arc::new(Holding::enforcing(scratch.path(), rules))),
+            scratch,
+        )
+        .await;
+        let target = format!("/Videos/{ITEM}/stream?ApiKey={TOKEN}");
+        assert_eq!(get(door.at, &target, &[]).await.0, 403, "{name}");
+        assert!(adapter.sent().is_empty(), "{name}");
+        assert!(upstream.sent().is_empty(), "{name}");
+    }
+}
+
+#[test]
+fn a_question_or_a_request_reaches_only_the_host_it_is_sent_to() {
+    let at = |target: &str| super::uri("http://jellyfin:8096", target).map(|uri| uri.to_string());
+    assert_eq!(
+        at(&format!("/Items/{ITEM}?x=1")),
+        Some(format!("http://jellyfin:8096/Items/{ITEM}?x=1"))
+    );
+    for target in [
+        "@evil.example/Items/1",
+        "//evil.example/Items/1",
+        "evil.example/Items/1",
+        "",
+        "/Items/1#x",
+    ] {
+        assert_eq!(at(target), None, "{target}");
+    }
+    assert_eq!(super::uri("jellyfin:8096", "/Items/1"), None);
+}
+
+/// An envelope around Jellyfin's declaration whose question goes to `adapter`.
+fn asking_its_adapter(upstream: &Fake, adapter: &Fake) -> Guarded {
+    let mut guarded = envelope(upstream, "http://127.0.0.1:1/pass", "10.80.96.3");
+    guarded.adapter = Some(adapter.address());
+    guarded.declared.question = Some(Question {
+        method: Method::Get,
+        path: MAY.to_owned(),
+        to: Addressee::Adapter,
+        answers: Answers::from_adapter(),
+    });
+    for path in &mut guarded.declared.bytes {
+        path.space = Some("item".to_owned());
+    }
+    guarded
+}
+
+#[tokio::test]
+async fn a_header_read_as_no_token_reaches_the_upstreams_question_as_it_reaches_the_upstream() {
+    let client = format!(r#"Authorization: MediaBrowser Client="x", Device="y", Token="{OTHER}""#);
+    let unshaped = "Authorization: Bearer not-a-token".to_owned();
+    for header in [client, unshaped] {
+        let upstream = fake::media_server().await;
+        let door = running(
+            Some(envelope(&upstream, "http://127.0.0.1:1/pass", "10.80.96.3")),
+            Duration::from_secs(1),
+        )
+        .await;
+        let target = format!("/Videos/{ITEM}/stream?api_key={TOKEN}");
+        assert_eq!(get(door.at, &target, &[&header]).await.0, 200, "{header}");
+        let sent = upstream.sent();
+        let [question, forwarded] = sent.as_slice() else {
+            unreachable!("one question and one request: {sent:?}");
+        };
+        let value = header.trim_start_matches("Authorization: ").to_owned();
+        assert_eq!(
+            question.header("authorization"),
+            vec![value.clone()],
+            "{header}"
+        );
+        assert_eq!(forwarded.header("authorization"), vec![value], "{header}");
+        assert_eq!(question.target, format!("/Items/{ITEM}?api_key={TOKEN}"));
+        assert_eq!(forwarded.target, target);
+    }
+}
+
+#[tokio::test]
+async fn a_header_read_as_no_token_is_refused_where_the_adapter_is_asked() {
+    for header in [
+        format!(r#"Authorization: MediaBrowser Client="x", Token="{OTHER}""#),
+        "Authorization: Bearer not-a-token".to_owned(),
+    ] {
+        let upstream = fake::media_server().await;
+        let adapter = fake::media_server().await;
+        let door = running(
+            Some(asking_its_adapter(&upstream, &adapter)),
+            Duration::from_secs(1),
+        )
+        .await;
+        let target = format!("/Videos/{ITEM}/stream?api_key={TOKEN}");
+        assert_eq!(get(door.at, &target, &[&header]).await.0, 403, "{header}");
+        assert!(adapter.sent().is_empty(), "{header}");
+        assert!(upstream.sent().is_empty(), "{header}");
+    }
+}
+
+#[tokio::test]
+async fn a_token_in_a_header_the_request_has_dropped_on_its_way_is_never_read() {
+    let upstream = fake::media_server().await;
+    let adapter = fake::media_server().await;
+    let mut guarded = asking_its_adapter(&upstream, &adapter);
+    guarded.declared.token.headers = vec!["X-Plex-Token".to_owned()];
+    adapter.answer(ITEM, 204);
+    let door = running(Some(guarded), Duration::from_secs(1)).await;
+    let token = format!("X-Plex-Token: {TOKEN}");
+    let target = format!("/Videos/{ITEM}/stream");
+    assert_eq!(
+        get(
+            door.at,
+            &target,
+            &[&token, "Connection: x-plex-token, close"]
+        )
+        .await
+        .0,
+        200
+    );
+    let asked = adapter.sent();
+    let [question] = asked.as_slice() else {
+        unreachable!("one question: {asked:?}");
+    };
+    assert!(question.header("authorization").is_empty(), "{question:?}");
+    let forwarded = upstream.sent();
+    let [only] = forwarded.as_slice() else {
+        unreachable!("the request alone: {forwarded:?}");
+    };
+    assert!(only.header("x-plex-token").is_empty(), "{only:?}");
 }
