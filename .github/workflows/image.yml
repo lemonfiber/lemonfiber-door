@@ -20,7 +20,7 @@ jobs:
       packages: write
       id-token: write
       attestations: write
-    uses: lemonfiber/spec/.github/workflows/first-party-image.yml@c5e71bae1a1e2a7c499fa85a4679501d041eafaf # v1.0.136
+    uses: lemonfiber/spec/.github/workflows/first-party-image.yml@8894900e86414b166ccd35f272b836d2e0d1b2c2 # v1.0.137
     with:
       pinned_in: plugin-door
     secrets:
