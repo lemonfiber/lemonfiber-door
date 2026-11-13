@@ -10,7 +10,7 @@ use http::header::{self, HeaderMap, HeaderName, HeaderValue};
 use http::uri::PathAndQuery;
 use http::{Method, Request, Response, StatusCode, Uri, Version};
 use http_body_util::combinators::BoxBody;
-use http_body_util::{BodyExt, Empty};
+use http_body_util::{BodyExt, Empty, Full, Limited};
 use hyper::body::Incoming;
 use hyper::upgrade::OnUpgrade;
 use hyper_util::client::legacy::connect::HttpConnector;
@@ -19,6 +19,7 @@ use hyper_util::rt::{TokioExecutor, TokioIo};
 
 use crate::client;
 use crate::holding::Holding;
+use crate::playlist;
 use crate::rules::{self, Carrying, Check, Decision, Going, Presenting, REFUSED};
 
 /// What the door answers with.
@@ -46,6 +47,19 @@ const FORWARDED_URI: &str = "x-forwarded-uri";
 const FORWARDED_FOR: &str = "x-forwarded-for";
 const FORWARDED_PROTO: &str = "x-forwarded-proto";
 const FORWARDED_HOST: &str = "x-forwarded-host";
+
+/// The coding that leaves a body as it is, the one a request on a pass accepts, so a
+/// playlist answered on it can be written into.
+const IDENTITY: &str = "identity";
+
+/// The headers of a playlist answered on a pass that name the playlist as the media
+/// server wrote it, rather than as the door writes it.
+const STALE: [HeaderName; 4] = [
+    header::CONTENT_LENGTH,
+    header::ETAG,
+    header::LAST_MODIFIED,
+    header::ACCEPT_RANGES,
+];
 
 /// The headers that make an answer to the question anything but a yes or a no.
 const CONDITIONAL: [&str; 6] = [
@@ -165,13 +179,14 @@ impl Door {
                     method: *method,
                     asked,
                     answers,
+                    carrying,
                 };
                 match carried(carrying, &headers) {
                     Some(carried) => self.asked(&question, carried).await,
                     None => Err(REFUSED),
                 }
             }
-            Check::Pass { at } => self.passed(at, &raw).await,
+            Check::Pass { at, .. } => self.passed(at, &raw).await,
         };
         if let Err(refused) = checked {
             return status(refused);
@@ -193,7 +208,11 @@ impl Door {
                 .await
                 .map_err(|_| UNANSWERED)?
                 .map_err(|_| UNREACHED)?;
-            rules::answered(question.answers, answer.status().as_u16())?;
+            rules::answered(
+                question.answers,
+                question.carrying,
+                answer.status().as_u16(),
+            )?;
         }
         Ok(())
     }
@@ -241,7 +260,11 @@ impl Door {
         let Some(to) = uri(upstream, &going.target) else {
             return status(UNREACHED);
         };
+        if going.check.pass().is_some() {
+            headers.insert(header::ACCEPT_ENCODING, HeaderValue::from_static(IDENTITY));
+        }
         let method = request.method().clone();
+        let head = method == Method::HEAD;
         let mut onward = Request::new(request.into_body());
         *onward.method_mut() = method;
         *onward.uri_mut() = to;
@@ -256,8 +279,57 @@ impl Door {
             return answer.map(BodyExt::boxed);
         }
         stripped(answer.headers_mut());
-        answer.map(BodyExt::boxed)
+        match going.check.pass() {
+            Some(pass) => on_pass(answer, pass, head).await,
+            None => answer.map(BodyExt::boxed),
+        }
     }
+}
+
+/// `answer`, to a request let through on `pass`, handed back with the pass written into
+/// every address of a playlist it holds; the playlist's length and validators, which
+/// name the playlist as the media server wrote it, taken off. A playlist the door cannot
+/// write into whole, being partial, encoded, longer than it writes or not text, is
+/// answered unreached.
+async fn on_pass(mut answer: Response<Incoming>, pass: &str, head: bool) -> Response<Body> {
+    let playlist = answer
+        .headers()
+        .get(header::CONTENT_TYPE)
+        .and_then(|kind| kind.to_str().ok())
+        .is_some_and(playlist::is_playlist);
+    if !playlist {
+        return answer.map(BodyExt::boxed);
+    }
+    let encoded = answer
+        .headers()
+        .get_all(header::CONTENT_ENCODING)
+        .iter()
+        .any(|coding| !coding.as_bytes().eq_ignore_ascii_case(IDENTITY.as_bytes()));
+    if encoded || answer.status() == StatusCode::PARTIAL_CONTENT {
+        return status(UNREACHED);
+    }
+    for stale in STALE {
+        answer.headers_mut().remove(stale);
+    }
+    if head
+        || matches!(
+            answer.status(),
+            StatusCode::NO_CONTENT | StatusCode::NOT_MODIFIED
+        )
+    {
+        return answer.map(BodyExt::boxed);
+    }
+    let (parts, body) = answer.into_parts();
+    let Ok(collected) = Limited::new(body, playlist::MOST).collect().await else {
+        return status(UNREACHED);
+    };
+    let Ok(text) = String::from_utf8(Vec::from(collected.to_bytes())) else {
+        return status(UNREACHED);
+    };
+    let written = Full::new(Bytes::from(playlist::written(&text, pass)))
+        .map_err(|never| match never {})
+        .boxed();
+    Response::from_parts(parts, written)
 }
 
 /// The household's upgraded connection and the media server's, joined end to end until
@@ -278,6 +350,8 @@ struct Question<'a> {
     asked: &'a [String],
     /// What each answer means.
     answers: &'a lemonfiber_ports::service::Answers,
+    /// What it carries besides its path.
+    carrying: &'a Carrying,
 }
 
 /// The headers a question carries, as `carrying` says: `headers`, the request's as the

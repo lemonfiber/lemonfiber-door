@@ -6,6 +6,7 @@ pub(crate) mod client;
 mod door;
 pub(crate) mod holding;
 pub(crate) mod listening;
+pub(crate) mod playlist;
 pub(crate) mod rules;
 pub(crate) mod serving;
 pub(crate) mod speaking;

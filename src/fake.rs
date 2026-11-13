@@ -3,7 +3,8 @@
 //!
 //! The media server answers a question, `/Items/<id>`, with the status the test set for
 //! that item, 200 where it set none, or after a minute where it set [`SLOW`]; `/socket`
-//! with an upgrade that echoes what it is sent; and anything else with `200` and a body naming the
+//! with an upgrade that echoes what it is sent; a path ending in `.m3u8` with a playlist;
+//! and anything else with `200` and a body naming the
 //! target it was sent. The pass service answers `200` where the request it is told of
 //! carries `lfpass=good`, and `403` otherwise.
 
@@ -195,6 +196,15 @@ async fn answered(
             );
             answer
         }
+        Kind::MediaServer
+            if target
+                .split('?')
+                .next()
+                .and_then(|path| std::path::Path::new(path).extension())
+                .is_some_and(|extension| extension.eq_ignore_ascii_case("m3u8")) =>
+        {
+            playlist(&target, &sent)
+        }
         Kind::MediaServer => {
             let item = target
                 .strip_prefix("/Items/")
@@ -228,6 +238,69 @@ async fn answered(
         }
     }
 }
+
+/// A playlist, answered as the query's `shape` says: `encoded` with a coding the door
+/// cannot write into, `partial` as a part of one, `long` beyond what the door writes into,
+/// `binary` as bytes that are not text, and otherwise whole, each with its length and
+/// validators.
+fn playlist(target: &str, sent: &Sent) -> Response<Full<Bytes>> {
+    let shape = target
+        .split_once("shape=")
+        .map(|(_, shape)| shape.split('&').next().unwrap_or_default())
+        .unwrap_or_default();
+    let body = match shape {
+        "long" => Bytes::from(vec![b'#'; crate::playlist::MOST + 1]),
+        "binary" => Bytes::from_static(b"#EXTM3U\n\xff.ts\n"),
+        _ => Bytes::from(PLAYLIST),
+    };
+    let length = body.len();
+    let mut answer = Response::new(Full::new(body));
+    let headers = answer.headers_mut();
+    let kind = if sent.method == "HEAD" {
+        "Audio/MPEGURL"
+    } else {
+        "application/vnd.apple.mpegurl; charset=utf-8"
+    };
+    headers.insert(
+        http::header::CONTENT_TYPE,
+        http::HeaderValue::from_static(kind),
+    );
+    headers.insert(
+        http::header::CONTENT_LENGTH,
+        http::HeaderValue::from(length),
+    );
+    headers.insert(http::header::ETAG, http::HeaderValue::from_static("\"p\""));
+    headers.insert(
+        http::header::LAST_MODIFIED,
+        http::HeaderValue::from_static("Mon, 02 Nov 2026 10:00:00 GMT"),
+    );
+    headers.insert(
+        http::header::ACCEPT_RANGES,
+        http::HeaderValue::from_static("bytes"),
+    );
+    headers.insert("x-kept", http::HeaderValue::from_static("1"));
+    match shape {
+        "encoded" => {
+            headers.insert(
+                http::header::CONTENT_ENCODING,
+                http::HeaderValue::from_static("gzip"),
+            );
+        }
+        "identity" => {
+            headers.insert(
+                http::header::CONTENT_ENCODING,
+                http::HeaderValue::from_static("Identity"),
+            );
+        }
+        "partial" => *answer.status_mut() = StatusCode::PARTIAL_CONTENT,
+        "unchanged" => *answer.status_mut() = StatusCode::NOT_MODIFIED,
+        _ => {}
+    }
+    answer
+}
+
+/// The playlist the media server answers whole.
+pub(crate) const PLAYLIST: &str = "#EXTM3U\n#EXT-X-MAP:URI=\"init.mp4\"\nseg.ts?x=1\n";
 
 fn reply(status: u16, body: &str) -> Response<Full<Bytes>> {
     let mut answer = Response::new(Full::new(Bytes::from(body.to_owned())));

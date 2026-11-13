@@ -23,6 +23,7 @@ See the spec:
 | `client` | Which client a request came from |
 | `holding` | The envelope the core applies, kept owner-only under `/state`, and the certificate's digest |
 | `serving` | Asking the question or the pass service, and forwarding the target checked |
+| `playlist` | A playlist served on a pass, the pass written into every address it holds |
 | `listening` | The plain and encrypted ports, HTTP/1.1 with upgrades and HTTP/2 |
 | `tls` | The certificate the core writes, read again when it changes |
 | `speaking` | `stream.guard@1` on the contract port |
