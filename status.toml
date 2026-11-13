@@ -1,0 +1,11 @@
+# What this repository implements, one row per requirement (OPS-R74).
+#
+# `done` means the requirement is met in full by what is here, `partial` that this
+# repository holds its part and the rest lives elsewhere, `open` that nothing here
+# meets it yet. The release gate and the no-stubs gate read this file; a pull
+# request that changes whether a requirement is met changes its row.
+
+requirement = [
+  { id = "D11-R2", state = "partial", evidence = ["src/rules.rs", "src/serving.rs", "src/rules/tests.rs::a_byte_path_asks_the_question_about_its_item", "src/rules/tests.rs::an_item_of_another_shape_is_refused_without_asking"] },
+  { id = "ARCH-R303", state = "partial", evidence = ["src/door.rs", "src/door/tests.rs::an_envelope_applied_over_the_contract_is_kept_under_state_and_nothing_under_config"] },
+]
