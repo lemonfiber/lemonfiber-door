@@ -4,9 +4,11 @@
 //! The media server answers a question, `/Items/<id>`, with the status the test set for
 //! that item, 200 where it set none, or after a minute where it set [`SLOW`]; `/socket`
 //! with an upgrade that echoes what it is sent; a path ending in `.m3u8` with a playlist;
-//! and anything else with `200` and a body naming the
-//! target it was sent. The pass service answers `200` where the request it is told of
-//! carries `lfpass=good`, and `403` otherwise.
+//! and anything else with `200`, a body naming the target it was sent, and a session
+//! header the household must never see. The pass service answers `204` where the request
+//! it is told of carries `lfpass=good`, the same with the fixtures' token as the session
+//! where it carries `lfpass=opens` and with a session of no token's shape where it
+//! carries `lfpass=odd`, and `403` otherwise.
 
 use std::collections::BTreeMap;
 use std::convert::Infallible;
@@ -160,13 +162,7 @@ async fn answered(
         all.push(sent.clone());
     }
     match kind {
-        Kind::Pass => {
-            let good = sent
-                .header("x-forwarded-uri")
-                .iter()
-                .any(|forwarded| forwarded.contains("lfpass=good"));
-            reply(if good { 200 } else { 403 }, "")
-        }
+        Kind::Pass => pass_answer(&sent),
         Kind::MediaServer if target == "/socket" => {
             let upgrading = hyper::upgrade::on(&mut request);
             tokio::spawn(async move {
@@ -223,7 +219,7 @@ async fn answered(
             if status == SLOW {
                 tokio::time::sleep(Duration::from_secs(60)).await;
             }
-            let mut answer = reply(status, &target);
+            let mut answer = echoing(status, &target);
             answer.headers_mut().insert(
                 http::header::CONNECTION,
                 http::HeaderValue::from_static("close, x-private"),
@@ -231,6 +227,10 @@ async fn answered(
             answer
                 .headers_mut()
                 .insert("x-private", http::HeaderValue::from_static("1"));
+            answer.headers_mut().insert(
+                "lemonfiber-session",
+                http::HeaderValue::from_static("upstream"),
+            );
             answer
                 .headers_mut()
                 .insert("keep-alive", http::HeaderValue::from_static("timeout=5"));
@@ -239,11 +239,72 @@ async fn answered(
     }
 }
 
+/// The pass service's answer to `sent`, as the module says.
+fn pass_answer(sent: &Sent) -> Response<Full<Bytes>> {
+    let told = sent.header("x-forwarded-uri").concat();
+    let carries = |pass: &str| told.contains(&format!("lfpass={pass}"));
+    let session = if carries("opens") {
+        Some(crate::fixtures::TOKEN)
+    } else if carries("odd") {
+        Some("not a token")
+    } else {
+        None
+    };
+    let mut answer = reply(
+        if carries("good") || session.is_some() {
+            204
+        } else {
+            403
+        },
+        "",
+    );
+    if let Some(session) = session {
+        let named = http::HeaderName::from_bytes(lemonfiber_sidecar::pass::SESSION.as_bytes())
+            .unwrap_or_else(|why| unreachable!("a header name: {why}"));
+        answer
+            .headers_mut()
+            .insert(named, http::HeaderValue::from_static(session));
+    }
+    answer
+}
+
+/// An answer with `status` naming `target`, or where its query says `echo=`, one echoing
+/// the fixtures' token, `text` in a subtitle's body and `header` in a header of its own,
+/// or with `echo=media` a video segment.
+fn echoing(status: u16, target: &str) -> Response<Full<Bytes>> {
+    let echo = target
+        .split_once("echo=")
+        .map(|(_, echo)| echo.split('&').next().unwrap_or_default())
+        .unwrap_or_default();
+    let token = crate::fixtures::TOKEN;
+    let (body, kind) = match echo {
+        "text" => (
+            format!("WEBVTT\n\n{}\n", token.to_ascii_uppercase()),
+            Some("text/vtt"),
+        ),
+        "media" => ("G@\u{1}".to_owned(), Some("video/mp2t")),
+        _ => (target.to_owned(), None),
+    };
+    let mut answer = reply(status, &body);
+    if let Some(kind) = kind {
+        answer.headers_mut().insert(
+            http::header::CONTENT_TYPE,
+            http::HeaderValue::from_static(kind),
+        );
+    }
+    if echo == "header" {
+        answer
+            .headers_mut()
+            .insert("x-echo", http::HeaderValue::from_static(token));
+    }
+    answer
+}
+
 /// A playlist, answered as the query's `shape` says: `encoded` with a coding the door
 /// cannot write into, `partial` as a part of one, `long` beyond what the door writes into,
 /// `binary` as bytes that are not text, `many` with more lines than the door writes
-/// into, and otherwise whole, each with its length and
-/// validators.
+/// into, `echoing` writing the fixtures' token into its addresses, `leaking` writing it
+/// into a comment, and otherwise whole, each with its length and validators.
 fn playlist(target: &str, sent: &Sent) -> Response<Full<Bytes>> {
     let shape = target
         .split_once("shape=")
@@ -253,6 +314,8 @@ fn playlist(target: &str, sent: &Sent) -> Response<Full<Bytes>> {
         "long" => Bytes::from(vec![b'#'; crate::playlist::MOST + 1]),
         "binary" => Bytes::from_static(b"#EXTM3U\n\xff.ts\n"),
         "many" => Bytes::from("s\n".repeat(crate::playlist::LINES_MOST + 1)),
+        "echoing" => Bytes::from(echoed(crate::fixtures::TOKEN)),
+        "leaking" => Bytes::from(format!("#EXTM3U\n# {}\nseg.ts\n", crate::fixtures::TOKEN)),
         _ => Bytes::from(PLAYLIST),
     };
     let length = body.len();
@@ -299,6 +362,14 @@ fn playlist(target: &str, sent: &Sent) -> Response<Full<Bytes>> {
         _ => {}
     }
     answer
+}
+
+/// A playlist that writes `token` into its addresses under every spelling of the
+/// fixtures' token parameters.
+fn echoed(token: &str) -> String {
+    format!(
+        "#EXTM3U\n#EXT-X-MAP:URI=\"init.mp4?ApiKey={token}\"\nmain.m3u8?MediaSourceId=1&api_key={token}\nseg.ts?APIKEY={token}&x=1\nseg2.ts?api%5Fkey={token}\n"
+    )
 }
 
 /// The playlist the media server answers whole.
