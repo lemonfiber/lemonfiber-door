@@ -676,6 +676,29 @@ fn asking_its_adapter(upstream: &Fake, adapter: &Fake) -> Guarded {
 }
 
 #[tokio::test]
+async fn an_adapter_that_could_not_ask_or_finds_no_session_refuses_the_request() {
+    let upstream = fake::media_server().await;
+    let adapter = fake::media_server().await;
+    let door = running(
+        Some(asking_its_adapter(&upstream, &adapter)),
+        Duration::from_secs(1),
+    )
+    .await;
+    let bearer = format!("Authorization: Bearer {TOKEN}");
+    let target = format!("/Videos/{ITEM}/stream");
+    for (answer, refused) in [(502, 403), (401, 401), (404, 404)] {
+        adapter.answer(ITEM, answer);
+        assert_eq!(
+            get(door.at, &target, &[bearer.as_str()]).await.0,
+            refused,
+            "{answer}"
+        );
+    }
+    assert_eq!(adapter.sent().len(), 3);
+    assert!(upstream.sent().is_empty());
+}
+
+#[tokio::test]
 async fn a_header_read_as_no_token_reaches_the_upstreams_question_as_it_reaches_the_upstream() {
     let client = format!(r#"Authorization: MediaBrowser Client="x", Device="y", Token="{OTHER}""#);
     let unshaped = "Authorization: Bearer not-a-token".to_owned();
@@ -755,3 +778,5 @@ async fn a_token_in_a_header_the_request_has_dropped_on_its_way_is_never_read() 
     };
     assert!(only.header("x-plex-token").is_empty(), "{only:?}");
 }
+
+mod playlists;

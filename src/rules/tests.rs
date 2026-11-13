@@ -333,7 +333,8 @@ fn a_live_stream_goes_on_without_its_pass_once_the_pass_service_is_asked() {
         forward(
             &format!("/LiveTv/LiveStreamFiles/{stream}/stream.ts?a=1&b=2"),
             Check::Pass {
-                at: PASS.to_owned()
+                at: PASS.to_owned(),
+                pass: "p.1.m".to_owned(),
             }
         )
     );
@@ -344,7 +345,8 @@ fn a_live_stream_goes_on_without_its_pass_once_the_pass_service_is_asked() {
         forward(
             &format!("/LiveTv/LiveStreamFiles/{stream}/stream.m3u8"),
             Check::Pass {
-                at: PASS.to_owned()
+                at: PASS.to_owned(),
+                pass: "p".to_owned(),
             }
         )
     );
@@ -359,6 +361,9 @@ fn a_live_stream_without_its_pass_once_in_its_spelling_or_of_another_shape_is_re
         format!("/LiveTv/LiveStreamFiles/{stream}/stream.ts?lfpass=p&lfpass=q"),
         format!("/LiveTv/LiveStreamFiles/{stream}/stream.ts?lfpass="),
         format!("/LiveTv/LiveStreamFiles/{stream}/stream.ts?lfpass"),
+        format!("/LiveTv/LiveStreamFiles/{stream}/stream.ts?lfpass=p%2Eq"),
+        format!("/LiveTv/LiveStreamFiles/{stream}/stream.ts?lfpass=p%22"),
+        format!("/LiveTv/LiveStreamFiles/{stream}/stream.ts?lfpass=p+q"),
         format!("/LiveTv/LiveStreamFiles/{stream}/stream.ts?lfpass=p&a+b=1"),
         format!("/LiveTv/LiveStreamFiles/{stream}/stream.ts?lfpass=p&itemId=1"),
         format!("/LiveTv/LiveStreamFiles/{stream}/stream.ts?lfpass=p&LiveStreamId=1"),
@@ -367,6 +372,30 @@ fn a_live_stream_without_its_pass_once_in_its_spelling_or_of_another_shape_is_re
     ] {
         assert_eq!(decided(&raw), Decision::Refuse(REFUSED), "{raw}");
     }
+}
+
+#[test]
+fn a_pass_longer_than_the_door_reads_is_refused() {
+    let stream = "0123456789abcdef0123456789abcdef";
+    let longest = "p".repeat(1024);
+    assert_eq!(
+        decided(&format!(
+            "/LiveTv/LiveStreamFiles/{stream}/stream.ts?lfpass={longest}"
+        )),
+        forward(
+            &format!("/LiveTv/LiveStreamFiles/{stream}/stream.ts"),
+            Check::Pass {
+                at: PASS.to_owned(),
+                pass: longest.clone(),
+            }
+        )
+    );
+    assert_eq!(
+        decided(&format!(
+            "/LiveTv/LiveStreamFiles/{stream}/stream.ts?lfpass={longest}p"
+        )),
+        Decision::Refuse(REFUSED)
+    );
 }
 
 #[test]
@@ -437,14 +466,33 @@ fn an_answer_is_read_by_the_class_it_is_declared_in_and_refused_in_none() {
         no_session: vec![Statuses::only(401)],
         not_from_there: vec![Statuses::only(403)],
     };
-    assert_eq!(answered(&answers, 200), Ok(()));
-    assert_eq!(answered(&answers, 206), Ok(()));
-    assert_eq!(answered(&answers, 404), Err(404));
-    assert_eq!(answered(&answers, 401), Err(401));
-    assert_eq!(answered(&answers, 403), Err(403));
+    let asked = |status| answered(&answers, &Carrying::Request, status);
+    assert_eq!(asked(200), Ok(()));
+    assert_eq!(asked(206), Ok(()));
+    assert_eq!(asked(404), Err(404));
+    assert_eq!(asked(401), Err(401));
+    assert_eq!(asked(403), Err(403));
     for unlisted in [302, 304, 400, 500, 502] {
-        assert_eq!(answered(&answers, unlisted), Err(REFUSED), "{unlisted}");
+        assert_eq!(asked(unlisted), Err(REFUSED), "{unlisted}");
     }
+}
+
+#[test]
+fn an_adapter_that_could_not_ask_its_upstream_is_a_refusal_whatever_the_classes_say() {
+    let answers = Answers {
+        may: vec![Statuses { from: 200, to: 599 }],
+        may_not: Vec::new(),
+        no_session: Vec::new(),
+        not_from_there: Vec::new(),
+    };
+    let adapter = Carrying::Token(None);
+    assert_eq!(answered(&answers, &adapter, 502), Err(REFUSED));
+    assert_eq!(answered(&answers, &adapter, 204), Ok(()));
+    assert_eq!(answered(&answers, &Carrying::Request, 502), Ok(()));
+    assert_eq!(
+        answered(&Answers::from_adapter(), &adapter, 502),
+        Err(REFUSED)
+    );
 }
 
 #[test]

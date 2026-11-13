@@ -18,8 +18,11 @@ const ITEM: &str = "item";
 /// Where the question names the item.
 const ITEM_PLACE: &str = "{item}";
 
-/// The query parameter a live-stream pass travels in.
+/// The query parameter a pass travels in.
 pub(crate) const PASS: &str = "lfpass";
+
+/// The longest pass the door reads, in bytes.
+const PASS_MOST: usize = 1 << 10;
 
 /// The most a compiled pattern may take, in bytes.
 const COMPILED_MOST: usize = 1 << 20;
@@ -35,6 +38,9 @@ const AUTHORIZATION: &str = "authorization";
 
 /// The status a request is refused with.
 pub(crate) const REFUSED: u16 = 403;
+
+/// The status the adapter answers its question with where its upstream cannot be asked.
+const UNASKED: u16 = 502;
 
 /// The methods that read what a byte or live-stream path serves, the only ones a
 /// question about it answers for.
@@ -125,6 +131,8 @@ pub(crate) enum Check {
     Pass {
         /// Where it is asked.
         at: String,
+        /// The pass, as the request carried it.
+        pass: String,
     },
 }
 
@@ -282,14 +290,16 @@ impl Rules {
                         .iter()
                         .any(|pair| pair.name.eq_ignore_ascii_case(parameter))
                 });
-            if naming_another || !reading || !Self::passable(live, target, &pairs) {
+            let pass = Self::passable(live, target, &pairs);
+            let (Some(pass), false, true) = (pass, naming_another, reading) else {
                 return Decision::Refuse(REFUSED);
-            }
+            };
             return Decision::Forward(Box::new(Going {
                 target: forwarded(Some(PASS)),
                 presenting,
                 check: Check::Pass {
                     at: self.guarded.pass.clone(),
+                    pass: pass.to_owned(),
                 },
             }));
         }
@@ -320,9 +330,10 @@ impl Rules {
         }))
     }
 
-    /// Whether a request on `live` names a live stream of its declared shape and carries
-    /// its pass once, in its one spelling, holding something.
-    fn passable(live: &Live, target: Target<'_>, pairs: &[Pair<'_>]) -> bool {
+    /// The pass a request on `live` carries, where it names a live stream of its declared
+    /// shape and carries its pass once, in its one spelling, held to the bytes a pass is
+    /// written in.
+    fn passable<'a>(live: &Live, target: Target<'_>, pairs: &[Pair<'a>]) -> Option<&'a str> {
         let named = !target.path.contains('%')
             && pairs.iter().all(|pair| plain(pair.name))
             && live
@@ -330,21 +341,46 @@ impl Rules {
                 .captures(target.path)
                 .and_then(|captured| captured.name(STREAM_NAME))
                 .is_some_and(|stream| live.stream.is_match(stream.as_str()));
-        let passes: Vec<&Pair<'_>> = pairs
-            .iter()
-            .filter(|pair| pair.name.eq_ignore_ascii_case(PASS))
-            .collect();
-        named
-            && matches!(
-                passes.as_slice(),
-                [pair] if pair.name == PASS && pair.value.is_some_and(|value| !value.is_empty())
-            )
+        named.then(|| carried(pairs)).flatten()
     }
 }
 
-/// What an answer to the question with `status` means: `Ok` where the member may have
-/// the item, and the status the request is refused with otherwise.
-pub(crate) fn answered(answers: &Answers, status: u16) -> Result<(), u16> {
+/// The pass `pairs` carry once, in its one spelling, holding unreserved bytes alone and no
+/// more than [`PASS_MOST`] of them.
+fn carried<'a>(pairs: &[Pair<'a>]) -> Option<&'a str> {
+    let passes: Vec<&Pair<'a>> = pairs
+        .iter()
+        .filter(|pair| pair.name.eq_ignore_ascii_case(PASS))
+        .collect();
+    let [pair] = passes.as_slice() else {
+        return None;
+    };
+    (pair.name == PASS)
+        .then_some(pair.value)
+        .flatten()
+        .filter(|value| {
+            (1..=PASS_MOST).contains(&value.len()) && value.bytes().all(target::unreserved)
+        })
+}
+
+impl Check {
+    /// The pass the request is let through on, where it is.
+    pub(crate) fn pass(&self) -> Option<&str> {
+        match self {
+            Self::Pass { pass, .. } => Some(pass),
+            Self::Nothing | Self::Question { .. } => None,
+        }
+    }
+}
+
+/// What an answer to the question with `status`, carrying as `carrying` says, means:
+/// `Ok` where the member may have the item, and the status the request is refused with
+/// otherwise. The adapter's answer that its upstream could not be asked is a refusal,
+/// whatever class the declaration puts it in.
+pub(crate) fn answered(answers: &Answers, carrying: &Carrying, status: u16) -> Result<(), u16> {
+    if matches!(carrying, Carrying::Token(_)) && status == UNASKED {
+        return Err(REFUSED);
+    }
     let within = |classes: &[Statuses]| {
         classes
             .iter()
