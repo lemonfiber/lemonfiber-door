@@ -21,6 +21,9 @@ const ITEM_PLACE: &str = "{item}";
 /// The query parameter a pass travels in.
 pub(crate) const PASS: &str = "lfpass";
 
+/// The longest pass the door reads, in bytes.
+const PASS_MOST: usize = 1 << 10;
+
 /// The most a compiled pattern may take, in bytes.
 const COMPILED_MOST: usize = 1 << 20;
 
@@ -342,7 +345,8 @@ impl Rules {
     }
 }
 
-/// The pass `pairs` carry once, in its one spelling, holding unreserved bytes alone.
+/// The pass `pairs` carry once, in its one spelling, holding unreserved bytes alone and no
+/// more than [`PASS_MOST`] of them.
 fn carried<'a>(pairs: &[Pair<'a>]) -> Option<&'a str> {
     let passes: Vec<&Pair<'a>> = pairs
         .iter()
@@ -354,7 +358,9 @@ fn carried<'a>(pairs: &[Pair<'a>]) -> Option<&'a str> {
     (pair.name == PASS)
         .then_some(pair.value)
         .flatten()
-        .filter(|value| !value.is_empty() && value.bytes().all(target::unreserved))
+        .filter(|value| {
+            (1..=PASS_MOST).contains(&value.len()) && value.bytes().all(target::unreserved)
+        })
 }
 
 impl Check {

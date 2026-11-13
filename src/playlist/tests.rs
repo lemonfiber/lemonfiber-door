@@ -1,6 +1,15 @@
-use super::{is_playlist, written};
+use super::{is_playlist, Origin, LINES_MOST, MOST};
 
 const PASS: &str = "bWVtYmVy.1700000000.bWFj";
+
+const DOOR: Origin<'static> = Origin {
+    scheme: "https",
+    authority: Some("media.home.local:8920"),
+};
+
+fn written(playlist: &str, pass: &str) -> String {
+    super::written(playlist, pass, DOOR).unwrap_or_else(|| unreachable!("written"))
+}
 
 #[test]
 fn a_playlist_is_known_by_its_media_type_in_any_case() {
@@ -24,11 +33,11 @@ fn a_playlist_is_known_by_its_media_type_in_any_case() {
 
 #[test]
 fn every_address_line_carries_the_pass_last_and_nothing_else_changes() {
-    let playlist = "#EXTM3U\r\n#EXT-X-VERSION:3\r\n\r\n#EXTINF:6.0,\r\nhls1/main/0.ts?a=1&b=2\r\n#EXTINF:6.0,\r\n  /abs/1.ts  \r\nhttps://h/2.ts#frag\n# a comment URI=\"left.ts\"\nlast.ts";
+    let playlist = "#EXTM3U\r\n#EXT-X-VERSION:3\r\n\r\n#EXTINF:6.0,\r\nhls1/main/0.ts?a=1&b=2\r\n#EXTINF:6.0,\r\n  /abs/1.ts  \r\n2.ts#frag\n# a comment URI=\"left.ts\"\nlast.ts";
     assert_eq!(
         written(playlist, PASS),
         format!(
-            "#EXTM3U\r\n#EXT-X-VERSION:3\r\n\r\n#EXTINF:6.0,\r\nhls1/main/0.ts?a=1&b=2&lfpass={PASS}\r\n#EXTINF:6.0,\r\n  /abs/1.ts?lfpass={PASS}  \r\nhttps://h/2.ts?lfpass={PASS}#frag\n# a comment URI=\"left.ts\"\nlast.ts?lfpass={PASS}"
+            "#EXTM3U\r\n#EXT-X-VERSION:3\r\n\r\n#EXTINF:6.0,\r\nhls1/main/0.ts?a=1&b=2&lfpass={PASS}\r\n#EXTINF:6.0,\r\n  /abs/1.ts?lfpass={PASS}  \r\n2.ts?lfpass={PASS}#frag\n# a comment URI=\"left.ts\"\nlast.ts?lfpass={PASS}"
         )
     );
 }
@@ -70,4 +79,45 @@ fn a_tag_without_attributes_or_with_an_unfinished_one_is_kept() {
     ] {
         assert_eq!(written(line, PASS), line);
     }
+}
+
+#[test]
+fn an_address_leading_anywhere_but_back_to_the_door_is_left_as_it_came() {
+    let playlist = "https://media.home.local:8920/own.ts\nHTTPS://MEDIA.HOME.LOCAL:8920?x=1\nhttps://media.home.local/port.ts\nhttp://media.home.local:8920/scheme.ts\nhttps://elsewhere.example/off.ts\n//media.home.local:8920/relative-scheme.ts\ndata:text/plain,x\nskd://key\na/b:c.ts\n#EXT-X-KEY:METHOD=AES-128,URI=\"https://keys.example/k\"\n";
+    assert_eq!(
+        written(playlist, PASS),
+        format!("https://media.home.local:8920/own.ts?lfpass={PASS}\nHTTPS://MEDIA.HOME.LOCAL:8920?x=1&lfpass={PASS}\nhttps://media.home.local/port.ts\nhttp://media.home.local:8920/scheme.ts\nhttps://elsewhere.example/off.ts\n//media.home.local:8920/relative-scheme.ts\ndata:text/plain,x\nskd://key\na/b:c.ts?lfpass={PASS}\n#EXT-X-KEY:METHOD=AES-128,URI=\"https://keys.example/k\"\n")
+    );
+}
+
+#[test]
+fn an_absolute_address_is_left_as_it_came_where_the_request_named_no_authority() {
+    let nameless = Origin {
+        scheme: "http",
+        authority: None,
+    };
+    assert_eq!(
+        super::written("http://media.home.local/a.ts\nb.ts\n", PASS, nameless),
+        Some(format!(
+            "http://media.home.local/a.ts\nb.ts?lfpass={PASS}\n"
+        ))
+    );
+}
+
+#[test]
+fn a_playlist_of_more_lines_than_the_door_writes_into_is_not_written() {
+    let most = "#\n".repeat(LINES_MOST);
+    assert!(super::written(&most, PASS, DOOR).is_some());
+    let more = format!("{most}#");
+    assert_eq!(super::written(&more, PASS, DOOR), None);
+}
+
+#[test]
+fn a_playlist_that_would_grow_beyond_what_the_door_answers_is_not_written() {
+    let line = format!("{}\n", "s".repeat(79));
+    let lines = MOST / line.len() - 1;
+    let playlist = line.repeat(lines.min(LINES_MOST));
+    assert!(playlist.len() <= MOST);
+    let long = "p".repeat(1024);
+    assert_eq!(super::written(&playlist, &long, DOOR), None);
 }

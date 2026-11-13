@@ -19,7 +19,7 @@ use hyper_util::rt::{TokioExecutor, TokioIo};
 
 use crate::client;
 use crate::holding::Holding;
-use crate::playlist;
+use crate::playlist::{self, Origin};
 use crate::rules::{self, Carrying, Check, Decision, Going, Presenting, REFUSED};
 
 /// What the door answers with.
@@ -249,13 +249,12 @@ impl Door {
                 headers.insert(header::UPGRADE, protocol.clone());
             }
         }
-        headers.insert(
-            FORWARDED_PROTO,
-            HeaderValue::from_static(if arrival.encrypted { "https" } else { "http" }),
-        );
-        if let Some(host) = host(&request) {
+        let scheme = if arrival.encrypted { "https" } else { "http" };
+        headers.insert(FORWARDED_PROTO, HeaderValue::from_static(scheme));
+        let host = host(&request);
+        if let Some(host) = &host {
             headers.insert(FORWARDED_HOST, host.clone());
-            headers.insert(header::HOST, host);
+            headers.insert(header::HOST, host.clone());
         }
         let Some(to) = uri(upstream, &going.target) else {
             return status(UNREACHED);
@@ -280,18 +279,29 @@ impl Door {
         }
         stripped(answer.headers_mut());
         match going.check.pass() {
-            Some(pass) => on_pass(answer, pass, head).await,
+            Some(pass) => {
+                let origin = Origin {
+                    scheme,
+                    authority: host.as_ref().and_then(|host| host.to_str().ok()),
+                };
+                on_pass(answer, pass, origin, head).await
+            }
             None => answer.map(BodyExt::boxed),
         }
     }
 }
 
-/// `answer`, to a request let through on `pass`, handed back with the pass written into
-/// every address of a playlist it holds; the playlist's length and validators, which
-/// name the playlist as the media server wrote it, taken off. A playlist the door cannot
-/// write into whole, being partial, encoded, longer than it writes or not text, is
-/// answered unreached.
-async fn on_pass(mut answer: Response<Incoming>, pass: &str, head: bool) -> Response<Body> {
+/// `answer`, to a request let through on `pass` at `origin`, handed back with the pass
+/// written into every address of a playlist it holds that leads back to `origin`; the
+/// playlist's length and validators, which name the playlist as the media server wrote
+/// it, taken off. A playlist the door cannot write into whole, being partial, encoded,
+/// longer than it writes before or after, or not text, is answered unreached.
+async fn on_pass(
+    mut answer: Response<Incoming>,
+    pass: &str,
+    origin: Origin<'_>,
+    head: bool,
+) -> Response<Body> {
     let playlist = answer
         .headers()
         .get(header::CONTENT_TYPE)
@@ -326,7 +336,10 @@ async fn on_pass(mut answer: Response<Incoming>, pass: &str, head: bool) -> Resp
     let Ok(text) = String::from_utf8(Vec::from(collected.to_bytes())) else {
         return status(UNREACHED);
     };
-    let written = Full::new(Bytes::from(playlist::written(&text, pass)))
+    let Some(written) = playlist::written(&text, pass, origin) else {
+        return status(UNREACHED);
+    };
+    let written = Full::new(Bytes::from(written))
         .map_err(|never| match never {})
         .boxed();
     Response::from_parts(parts, written)

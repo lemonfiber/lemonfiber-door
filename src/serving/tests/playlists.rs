@@ -47,7 +47,7 @@ async fn a_playlist_answered_on_a_pass_carries_it_in_every_address_and_nothing_e
     .await;
     assert_eq!(status, 200);
     let (headers, body) = split(&answer);
-    let expected = "#EXTM3U\n#EXT-X-MAP:URI=\"init.mp4?lfpass=good\"\nseg.ts?x=1&lfpass=good\n";
+    let expected = "#EXTM3U\n#EXT-X-MAP:URI=\"init.mp4?lfpass=good\"\nseg.ts?x=1&lfpass=good\nhttp://media.home.local/own.ts?lfpass=good\nhttps://elsewhere.example/off.ts\n";
     assert_eq!(body, expected);
     assert!(headers.contains(&format!("content-length: {}", expected.len())));
     assert!(headers.contains(&"x-kept: 1".to_owned()));
@@ -68,7 +68,7 @@ async fn a_playlist_answered_on_a_pass_carries_it_in_every_address_and_nothing_e
 #[tokio::test]
 async fn a_playlist_the_door_cannot_write_into_whole_is_answered_unreached() {
     let (door, _upstream) = on_a_pass().await;
-    for shape in ["encoded", "partial", "long", "binary"] {
+    for shape in ["encoded", "partial", "long", "binary", "many"] {
         let (status, _) = get(door.at, &live(&format!("lfpass=good&shape={shape}")), &[]).await;
         assert_eq!(status, 502, "{shape}");
     }

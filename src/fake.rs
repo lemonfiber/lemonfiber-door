@@ -241,7 +241,8 @@ async fn answered(
 
 /// A playlist, answered as the query's `shape` says: `encoded` with a coding the door
 /// cannot write into, `partial` as a part of one, `long` beyond what the door writes into,
-/// `binary` as bytes that are not text, and otherwise whole, each with its length and
+/// `binary` as bytes that are not text, `many` with more lines than the door writes
+/// into, and otherwise whole, each with its length and
 /// validators.
 fn playlist(target: &str, sent: &Sent) -> Response<Full<Bytes>> {
     let shape = target
@@ -251,6 +252,7 @@ fn playlist(target: &str, sent: &Sent) -> Response<Full<Bytes>> {
     let body = match shape {
         "long" => Bytes::from(vec![b'#'; crate::playlist::MOST + 1]),
         "binary" => Bytes::from_static(b"#EXTM3U\n\xff.ts\n"),
+        "many" => Bytes::from("s\n".repeat(crate::playlist::LINES_MOST + 1)),
         _ => Bytes::from(PLAYLIST),
     };
     let length = body.len();
@@ -300,7 +302,7 @@ fn playlist(target: &str, sent: &Sent) -> Response<Full<Bytes>> {
 }
 
 /// The playlist the media server answers whole.
-pub(crate) const PLAYLIST: &str = "#EXTM3U\n#EXT-X-MAP:URI=\"init.mp4\"\nseg.ts?x=1\n";
+pub(crate) const PLAYLIST: &str = "#EXTM3U\n#EXT-X-MAP:URI=\"init.mp4\"\nseg.ts?x=1\nhttp://media.home.local/own.ts\nhttps://elsewhere.example/off.ts\n";
 
 fn reply(status: u16, body: &str) -> Response<Full<Bytes>> {
     let mut answer = Response::new(Full::new(Bytes::from(body.to_owned())));

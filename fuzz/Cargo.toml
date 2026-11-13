@@ -1,0 +1,29 @@
+# Fuzz targets for what the door reads from elsewhere: a playlist the media server
+# writes. Its own workspace, built with a nightly toolchain and a sanitizer, outside the
+# door's lint set.
+[package]
+name = "lemonfiber-door-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+license-file = "../LICENSE"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+arbitrary = { version = "1", features = ["derive"] }
+
+[dependencies.lemonfiber-door]
+path = ".."
+
+[workspace]
+members = ["."]
+
+[[bin]]
+name = "playlist"
+path = "fuzz_targets/playlist.rs"
+test = false
+doc = false
+bench = false

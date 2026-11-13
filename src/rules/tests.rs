@@ -375,6 +375,30 @@ fn a_live_stream_without_its_pass_once_in_its_spelling_or_of_another_shape_is_re
 }
 
 #[test]
+fn a_pass_longer_than_the_door_reads_is_refused() {
+    let stream = "0123456789abcdef0123456789abcdef";
+    let longest = "p".repeat(1024);
+    assert_eq!(
+        decided(&format!(
+            "/LiveTv/LiveStreamFiles/{stream}/stream.ts?lfpass={longest}"
+        )),
+        forward(
+            &format!("/LiveTv/LiveStreamFiles/{stream}/stream.ts"),
+            Check::Pass {
+                at: PASS.to_owned(),
+                pass: longest.clone(),
+            }
+        )
+    );
+    assert_eq!(
+        decided(&format!(
+            "/LiveTv/LiveStreamFiles/{stream}/stream.ts?lfpass={longest}p"
+        )),
+        Decision::Refuse(REFUSED)
+    );
+}
+
+#[test]
 fn every_other_path_goes_on_as_it_came() {
     for raw in ["/web/index.html", "/Users/Me?x=1&&y", "/System/Info/Public"] {
         assert_eq!(decided(raw), forward(raw, Check::Nothing), "{raw}");
