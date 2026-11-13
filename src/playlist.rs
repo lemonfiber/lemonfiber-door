@@ -1,10 +1,12 @@
-//! A playlist served on a pass, with that pass written into every address it holds that
-//! leads back to the door: each line that is an address, and each quoted `URI`
-//! attribute of a tag, where it is a relative reference or names the door's own origin.
-//! Nothing else of it changes, so a player fetching its parts carries the pass unaltered
-//! and carries it nowhere else.
+//! A playlist served on a pass, with that pass, and on a live-stream pass the parameter
+//! naming the live stream, written into every address it holds that leads back to the
+//! door, and every parameter a member's token reaches the upstream in taken off it: each
+//! line that is an address, and each quoted `URI` attribute of a tag, where it is a
+//! relative reference or names the door's own origin. Nothing else of it changes, so a
+//! player fetching its parts carries the pass unaltered, carries it nowhere else, and is
+//! handed no token the upstream wrote into it.
 
-use crate::rules::PASS;
+use crate::target;
 
 /// The media types an HLS playlist is served as, matched without regard to case.
 const TYPES: [&str; 3] = [
@@ -16,6 +18,19 @@ const TYPES: [&str; 3] = [
 /// The most of a playlist the door writes a pass into, and the most it answers once
 /// written, in bytes.
 pub const MOST: usize = 16 << 20;
+
+/// The media types whose bodies only media is served as, matched by their start without
+/// regard to case, but for a type written in XML or JSON.
+const MEDIA: [&str; 5] = [
+    "video/",
+    "audio/",
+    "image/",
+    "application/octet-stream",
+    "application/mp4",
+];
+
+/// The suffixes of a media type whose body is text however it starts.
+const TEXT_SUFFIXES: [&str; 2] = ["+xml", "+json"];
 
 /// The most lines of a playlist the door writes a pass into.
 pub const LINES_MOST: usize = 1 << 18;
@@ -39,6 +54,30 @@ pub struct Origin<'a> {
     pub authority: Option<&'a str>,
 }
 
+/// Whether an answer of `content_type` is one only media is served as, which holds no text
+/// a token could be written into.
+#[must_use]
+pub fn is_media(content_type: &str) -> bool {
+    let essence = content_type
+        .split(';')
+        .next()
+        .unwrap_or_default()
+        .trim()
+        .to_ascii_lowercase();
+    MEDIA.iter().any(|kind| essence.starts_with(kind))
+        && !TEXT_SUFFIXES.iter().any(|suffix| essence.ends_with(suffix))
+}
+
+/// Whether `body` holds `secret` anywhere, matched without regard to case.
+#[must_use]
+pub fn holds(body: &[u8], secret: &str) -> bool {
+    let secret = secret.as_bytes();
+    secret.is_empty()
+        || body
+            .windows(secret.len())
+            .any(|window| window.eq_ignore_ascii_case(secret))
+}
+
 /// Whether an answer of `content_type` is a playlist.
 #[must_use]
 pub fn is_playlist(content_type: &str) -> bool {
@@ -46,11 +85,18 @@ pub fn is_playlist(content_type: &str) -> bool {
     TYPES.iter().any(|kind| kind.eq_ignore_ascii_case(essence))
 }
 
-/// `playlist` with `pass` written into every address it holds that leads back to
+/// `playlist` with each of `carried`, a parameter's name and value, written into, and
+/// every parameter named in `stripped` taken off, every address it holds that leads back
+/// to
 /// `origin`; nothing where it holds more lines than [`LINES_MOST`] or would be longer
 /// than [`MOST`] once written.
 #[must_use]
-pub fn written(playlist: &str, pass: &str, origin: Origin<'_>) -> Option<String> {
+pub fn written(
+    playlist: &str,
+    carried: &[(&str, &str)],
+    stripped: &[&str],
+    origin: Origin<'_>,
+) -> Option<String> {
     let (mark, lines) = playlist.strip_prefix(BOM).map_or(("", playlist), |rest| {
         (playlist.split_at(BOM.len_utf8()).0, rest)
     });
@@ -59,7 +105,7 @@ pub fn written(playlist: &str, pass: &str, origin: Origin<'_>) -> Option<String>
     }
     let address = |reference: &str| {
         if back_to(reference, origin) {
-            addressed(reference, pass)
+            addressed(reference, carried, stripped)
         } else {
             reference.to_owned()
         }
@@ -152,34 +198,42 @@ fn tagged(line: &str, address: &impl Fn(&str) -> String) -> String {
     out
 }
 
-/// `address` with `pass` as its one pass, put last in its query and before any fragment,
-/// every other byte of it kept.
-fn addressed(address: &str, pass: &str) -> String {
+/// `address` with each of `carried` as its one parameter of that name, put last in its
+/// query in order and before any fragment, and no parameter named in `stripped`, each
+/// name matched without regard to case once decoded; every other byte of it kept.
+fn addressed(address: &str, carried: &[(&str, &str)], stripped: &[&str]) -> String {
     let (located, fragment) = address
         .find('#')
         .map_or((address, ""), |at| address.split_at(at));
     let (path, query) = located
         .split_once('?')
         .map_or((located, None), |(path, query)| (path, Some(query)));
+    let written = |pair: &&str| {
+        let name = target::decoded(pair.split('=').next().unwrap_or_default());
+        carried
+            .iter()
+            .map(|(carried, _)| carried)
+            .chain(stripped)
+            .any(|named| named.eq_ignore_ascii_case(&name))
+    };
     let mut kept = query
         .map(|query| {
             query
                 .split('&')
-                .filter(|pair| {
-                    !pair
-                        .split('=')
-                        .next()
-                        .unwrap_or_default()
-                        .eq_ignore_ascii_case(PASS)
-                })
+                .filter(|pair| !written(pair))
                 .collect::<Vec<_>>()
                 .join("&")
         })
         .unwrap_or_default();
-    if !kept.is_empty() && !kept.ends_with('&') {
-        kept.push('&');
+    for (name, value) in carried {
+        if !kept.is_empty() && !kept.ends_with('&') {
+            kept.push('&');
+        }
+        kept.push_str(name);
+        kept.push('=');
+        kept.push_str(value);
     }
-    format!("{path}?{kept}{PASS}={pass}{fragment}")
+    format!("{path}?{kept}{fragment}")
 }
 
 #[cfg(test)]

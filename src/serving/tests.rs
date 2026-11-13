@@ -779,4 +779,6 @@ async fn a_token_in_a_header_the_request_has_dropped_on_its_way_is_never_read() 
     assert!(only.header("x-plex-token").is_empty(), "{only:?}");
 }
 
+mod live;
+mod opening;
 mod playlists;

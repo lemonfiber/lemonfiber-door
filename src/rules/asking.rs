@@ -10,20 +10,22 @@ use lemonfiber_ports::service::{
 
 use super::reading::Read;
 use super::{
-    encoded, Bytes, Carrying, Check, InQuery, Naming, Rules, AUTHORIZATION, BEARING, ITEM,
+    encoded, valued, Bytes, Carrying, Check, InQuery, Naming, Rules, AUTHORIZATION, BEARING, ITEM,
     ITEM_PLACE, REFUSED,
 };
-use crate::target::{self, unreserved, Pair, Target};
+use crate::target::{unreserved, Pair, Target};
 
 impl Rules {
     /// The question a request on `bytes` is asked about, or the status it is refused
-    /// with.
+    /// with; a parameter naming another item spelt as `ignoring` in any case, the one a
+    /// live-stream path covering the request names its live stream in, left unread.
     pub(super) fn asked(
         &self,
         bytes: &Bytes,
         target: Target<'_>,
         pairs: &[Pair<'_>],
         read: Read<'_>,
+        ignoring: Option<&str>,
     ) -> Result<Check, u16> {
         let path = target.path;
         let split_otherwise = target.query.is_some_and(|query| query.contains(';'));
@@ -44,7 +46,10 @@ impl Rules {
         .filter(|item| bytes.item.is_match(item))
         .ok_or(REFUSED)?;
         let mut items = vec![item];
-        for (parameter, naming) in &bytes.naming {
+        let naming = bytes.naming.iter().filter(|(parameter, _)| {
+            ignoring.is_none_or(|ignored| !ignored.eq_ignore_ascii_case(parameter))
+        });
+        for (parameter, naming) in naming {
             let named: Vec<&Pair<'_>> = pairs
                 .iter()
                 .filter(|pair| pair.name.eq_ignore_ascii_case(parameter))
@@ -165,23 +170,11 @@ impl Rules {
     }
 }
 
-/// The item `query` finds in the one parameter of its spelling, decoded once, where the
-/// value holds no `+`, which a reader decoding it as a form takes for a space, no `%`
-/// once decoded, is matched whole by its pattern, and the item it holds is plain.
+/// The item `query` finds in the one parameter of its spelling, read as [`valued`]
+/// reads it, where the value names a path every reader reaches alike, is matched whole by
+/// its pattern, and the item it holds is plain.
 fn in_query(query: &InQuery, pairs: &[Pair<'_>]) -> Option<String> {
-    let named: Vec<&Pair<'_>> = pairs
-        .iter()
-        .filter(|pair| pair.name.eq_ignore_ascii_case(&query.parameter))
-        .collect();
-    let [pair] = named.as_slice() else {
-        return None;
-    };
-    let value = (pair.name == query.parameter)
-        .then_some(pair.value)
-        .flatten()
-        .filter(|raw| !raw.contains('+'))
-        .and_then(target::decoded_value)
-        .filter(|value| !value.contains('%') && walkable(value))?;
+    let value = valued(&query.parameter, pairs).filter(|value| walkable(value))?;
     query
         .pattern
         .captures(&value)

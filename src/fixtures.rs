@@ -76,6 +76,7 @@ pub(crate) fn declared() -> Declared {
         ],
         live: vec![LivePath {
             pattern: format!("{PREFIXED}/LiveTv/LiveStreamFiles/(?P<stream>[^/]+)/stream\\."),
+            parameter: None,
             stream: HEX.to_owned(),
         }],
         refused: vec![
@@ -106,6 +107,7 @@ pub(crate) fn declared() -> Declared {
             stream: "{base}/Videos/{item}/master.m3u8".to_owned(),
             poster: "{base}/Items/{item}/Images/Primary".to_owned(),
             backdrop: "{base}/Items/{item}/Images/Backdrop".to_owned(),
+            playlist: None,
         },
         ports: Ports {
             upstream: 8096,
