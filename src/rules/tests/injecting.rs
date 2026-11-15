@@ -16,7 +16,7 @@ fn rules_with(change: impl FnOnce(&mut lemonfiber_ports::service::Declared)) -> 
 fn asked_of(decision: Decision) -> Vec<String> {
     match check_of(decision) {
         Check::Question { asked, .. } => asked,
-        other => unreachable!("asks nothing: {other:?}"),
+        Check::Nothing => unreachable!("asks nothing"),
     }
 }
 

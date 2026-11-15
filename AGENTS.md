@@ -42,6 +42,13 @@ See the spec:
   envelope; nothing here knows Jellyfin.
 - **It believes `X-Forwarded-For` from the envelope's `proxy` alone**, takes that
   proxy's rightmost entry, and tells the media server that one client.
+- **A session the pass service hands it goes only into the question and the request it
+  forwards**, in a header and never in the query. It is never logged and never answered
+  back: a playlist served on a pass loses every token parameter, and an answer whose
+  headers or readable body still hold the session is answered `502`.
+- **A live stream named in a query parameter is a route the media server serves an item
+  on too**, so the item a byte path places there is asked about with the member's token
+  beside the pass.
 - **A request carries one member's token**: it is read from the bearer header, the
   header it is presented in, each token parameter and each token header the declaration
   names; the same token in several of them is one token, and different tokens, one place

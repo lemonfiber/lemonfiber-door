@@ -16,11 +16,12 @@ use hyper::upgrade::OnUpgrade;
 use hyper_util::client::legacy::connect::HttpConnector;
 use hyper_util::client::legacy::Client;
 use hyper_util::rt::{TokioExecutor, TokioIo};
+use lemonfiber_sidecar::pass::{FORWARDED as FORWARDED_URI, SESSION};
 
 use crate::client;
 use crate::holding::Holding;
 use crate::playlist::{self, Origin};
-use crate::rules::{self, Carrying, Check, Decision, Going, Presenting, REFUSED};
+use crate::rules::{self, Carrying, Check, Decision, Going, Presenting, Writing, REFUSED};
 
 /// What the door answers with.
 pub(crate) type Body = BoxBody<Bytes, hyper::Error>;
@@ -39,9 +40,6 @@ const UNREACHED: u16 = 502;
 
 /// The status a request is answered with where the media server does not answer in time.
 const UNANSWERED: u16 = 504;
-
-/// The header the door names a live stream's request in, to the pass service.
-const FORWARDED_URI: &str = "x-forwarded-uri";
 
 /// The headers that name who and what the request came through, which the door writes.
 const FORWARDED_FOR: &str = "x-forwarded-for";
@@ -151,9 +149,17 @@ impl Door {
             })
             .map(|(name, value)| (name.as_str(), value.as_bytes()))
             .collect();
-        let going = match rules.decide(request.method().as_str(), &raw, &authorization, &headers) {
+        let method = request.method().as_str();
+        let going = match rules.decide(method, &raw, &authorization, &headers) {
             Decision::Refuse(refused) => return status(refused),
             Decision::Forward(going) => going,
+            Decision::Open(opening) => match self.session(&opening.at, &raw).await {
+                Ok(session) => match rules.opened(method, &opening, &session) {
+                    Decision::Forward(going) => going,
+                    _ => return status(REFUSED),
+                },
+                Err(refused) => return status(refused),
+            },
         };
         let forwarded: Vec<&[u8]> = request
             .headers()
@@ -165,6 +171,11 @@ impl Door {
         let Some(headers) = outgoing(&request, &going.presenting, client) else {
             return status(REFUSED);
         };
+        if let Some(at) = &going.pass_service {
+            if let Err(refused) = self.passed(at, &raw).await {
+                return status(refused);
+            }
+        }
         let checked = match &going.check {
             Check::Nothing => Ok(()),
             Check::Question {
@@ -186,7 +197,6 @@ impl Door {
                     None => Err(REFUSED),
                 }
             }
-            Check::Pass { at, .. } => self.passed(at, &raw).await,
         };
         if let Err(refused) = checked {
             return status(refused);
@@ -220,13 +230,32 @@ impl Door {
     /// Whether the pass service at `at` says the pass the request `raw` names is good;
     /// anything but a yes, and no answer, is a refusal.
     async fn passed(&self, at: &str, raw: &str) -> Result<(), u16> {
+        self.pass_answer(at, raw).await.map(drop)
+    }
+
+    /// The session the pass service at `at` says the pass the request `raw` names opens;
+    /// a yes naming none, anything but a yes, and no answer, are a refusal.
+    async fn session(&self, at: &str, raw: &str) -> Result<String, u16> {
+        self.pass_answer(at, raw)
+            .await?
+            .headers()
+            .get(SESSION)
+            .and_then(|session| session.to_str().ok())
+            .map(str::to_owned)
+            .ok_or(REFUSED)
+    }
+
+    /// The pass service's yes about the pass the request `raw` names, asked at `at`;
+    /// anything but a yes, and no answer, is a refusal.
+    async fn pass_answer(&self, at: &str, raw: &str) -> Result<Response<Incoming>, u16> {
         let mut request = Request::new(Empty::new());
         *request.uri_mut() = at.parse().map_err(|_| REFUSED)?;
         let forwarded = HeaderValue::from_str(raw).map_err(|_| REFUSED)?;
-        request.headers_mut().insert(FORWARDED_URI, forwarded);
+        let named = HeaderName::from_bytes(FORWARDED_URI.as_bytes()).map_err(|_| REFUSED)?;
+        request.headers_mut().insert(named, forwarded);
         let answered = tokio::time::timeout(self.answering, self.asking.request(request)).await;
         match answered {
-            Ok(Ok(answer)) if answer.status().is_success() => Ok(()),
+            Ok(Ok(answer)) if answer.status().is_success() => Ok(answer),
             _ => Err(REFUSED),
         }
     }
@@ -241,7 +270,7 @@ impl Door {
         mut headers: HeaderMap,
         arrival: Arrival,
     ) -> Response<Body> {
-        let upgrading = upgrade(request.headers());
+        let upgrading = upgrade(request.headers()) && going.writing.is_none();
         let downstream = upgrading.then(|| hyper::upgrade::on(&mut request));
         if upgrading {
             headers.insert(header::CONNECTION, HeaderValue::from_static("upgrade"));
@@ -259,7 +288,7 @@ impl Door {
         let Some(to) = uri(upstream, &going.target) else {
             return status(UNREACHED);
         };
-        if going.check.pass().is_some() {
+        if going.writing.is_some() {
             headers.insert(header::ACCEPT_ENCODING, HeaderValue::from_static(IDENTITY));
         }
         let method = request.method().clone();
@@ -272,42 +301,55 @@ impl Door {
         let Ok(mut answer) = self.forwarding.request(onward).await else {
             return status(UNREACHED);
         };
+        answer.headers_mut().remove(SESSION);
         if let (Some(downstream), StatusCode::SWITCHING_PROTOCOLS) = (downstream, answer.status()) {
             let upstream = hyper::upgrade::on(&mut answer);
             tokio::spawn(joined(downstream, upstream));
             return answer.map(BodyExt::boxed);
         }
         stripped(answer.headers_mut());
-        match going.check.pass() {
-            Some(pass) => {
-                let origin = Origin {
-                    scheme,
-                    authority: host.as_ref().and_then(|host| host.to_str().ok()),
-                };
-                on_pass(answer, pass, origin, head).await
-            }
-            None => answer.map(BodyExt::boxed),
-        }
+        let Some(writing) = &going.writing else {
+            return answer.map(BodyExt::boxed);
+        };
+        let origin = Origin {
+            scheme,
+            authority: host.as_ref().and_then(|host| host.to_str().ok()),
+        };
+        on_pass(answer, writing, origin, head).await
     }
 }
 
-/// `answer`, to a request let through on `pass` at `origin`, handed back with the pass
-/// written into every address of a playlist it holds that leads back to `origin`; the
-/// playlist's length and validators, which name the playlist as the media server wrote
-/// it, taken off. A playlist the door cannot write into whole, being partial, encoded,
-/// longer than it writes before or after, or not text, is answered unreached.
+/// `answer`, to a request let through on a pass at `origin`, handed back as `writing`
+/// says. A playlist has its parameters written into, and its token parameters taken off,
+/// every address that leads back to `origin`, and loses the length and validators that
+/// name it as the media server wrote it. Where the request was presented a session, an
+/// answer whose headers hold it is answered unreached, and so is one whose body, read
+/// whole unless its type is one only media is served as, holds it. A body the door
+/// cannot read whole, being partial, encoded, longer than it reads or writes, or for a
+/// playlist not text, is answered unreached.
 async fn on_pass(
     mut answer: Response<Incoming>,
-    pass: &str,
+    writing: &Writing,
     origin: Origin<'_>,
     head: bool,
 ) -> Response<Body> {
-    let playlist = answer
+    let session = writing.session.as_deref();
+    let holding = |bytes: &[u8]| session.is_some_and(|session| playlist::holds(bytes, session));
+    if answer
+        .headers()
+        .values()
+        .any(|value| holding(value.as_bytes()))
+    {
+        return status(UNREACHED);
+    }
+    let kind = answer
         .headers()
         .get(header::CONTENT_TYPE)
         .and_then(|kind| kind.to_str().ok())
-        .is_some_and(playlist::is_playlist);
-    if !playlist {
+        .unwrap_or_default()
+        .to_owned();
+    let playlist = playlist::is_playlist(&kind);
+    if !playlist && (session.is_none() || playlist::is_media(&kind)) {
         return answer.map(BodyExt::boxed);
     }
     let encoded = answer
@@ -318,8 +360,10 @@ async fn on_pass(
     if encoded || answer.status() == StatusCode::PARTIAL_CONTENT {
         return status(UNREACHED);
     }
-    for stale in STALE {
-        answer.headers_mut().remove(stale);
+    if playlist {
+        for stale in STALE {
+            answer.headers_mut().remove(stale);
+        }
     }
     if head
         || matches!(
@@ -333,16 +377,35 @@ async fn on_pass(
     let Ok(collected) = Limited::new(body, playlist::MOST).collect().await else {
         return status(UNREACHED);
     };
-    let Ok(text) = String::from_utf8(Vec::from(collected.to_bytes())) else {
-        return status(UNREACHED);
+    let read = collected.to_bytes();
+    let body = if playlist {
+        let Some(written) = written(read, writing, origin) else {
+            return status(UNREACHED);
+        };
+        written
+    } else {
+        read
     };
-    let Some(written) = playlist::written(&text, pass, origin) else {
+    if holding(&body) {
         return status(UNREACHED);
-    };
-    let written = Full::new(Bytes::from(written))
-        .map_err(|never| match never {})
-        .boxed();
-    Response::from_parts(parts, written)
+    }
+    Response::from_parts(
+        parts,
+        Full::new(body).map_err(|never| match never {}).boxed(),
+    )
+}
+
+/// `read`, a playlist, written as `writing` says for `origin`; nothing where it is not
+/// text or the door does not write it.
+fn written(read: Bytes, writing: &Writing, origin: Origin<'_>) -> Option<Bytes> {
+    let text = String::from_utf8(Vec::from(read)).ok()?;
+    let carried: Vec<(&str, &str)> = writing
+        .carried
+        .iter()
+        .map(|(name, value)| (name.as_str(), value.as_str()))
+        .collect();
+    let stripped: Vec<&str> = writing.stripped.iter().map(String::as_str).collect();
+    playlist::written(&text, &carried, &stripped, origin).map(Bytes::from)
 }
 
 /// The household's upgraded connection and the media server's, joined end to end until
@@ -408,6 +471,7 @@ fn outgoing<B>(request: &Request<B>, presenting: &Presenting, client: IpAddr) ->
         FORWARDED_PROTO,
         FORWARDED_HOST,
         FORWARDED_URI,
+        SESSION,
     ] {
         headers.remove(written);
     }

@@ -653,14 +653,17 @@ dependencies = [
 [[package]]
 name = "lemonfiber-adapter-kit"
 version = "0.17.0"
-source = "git+https://github.com/lemonfiber/lemonfiber?rev=0d8245e1af6579fbc5b2e186c21597475b18dc0d#0d8245e1af6579fbc5b2e186c21597475b18dc0d"
+source = "git+https://github.com/lemonfiber/lemonfiber?rev=2fee5cf8935ee541c8e6fee4e85d8b00ae2611e6#2fee5cf8935ee541c8e6fee4e85d8b00ae2611e6"
 dependencies = [
  "async-trait",
  "axum",
  "form_urlencoded",
+ "futures-util",
  "lemonfiber-contract",
  "lemonfiber-error",
+ "lemonfiber-pinned",
  "lemonfiber-ports",
+ "lemonfiber-random",
  "reqwest",
  "rustix",
  "rustls",
@@ -673,7 +676,7 @@ dependencies = [
 [[package]]
 name = "lemonfiber-contract"
 version = "0.17.0"
-source = "git+https://github.com/lemonfiber/lemonfiber?rev=0d8245e1af6579fbc5b2e186c21597475b18dc0d#0d8245e1af6579fbc5b2e186c21597475b18dc0d"
+source = "git+https://github.com/lemonfiber/lemonfiber?rev=2fee5cf8935ee541c8e6fee4e85d8b00ae2611e6#2fee5cf8935ee541c8e6fee4e85d8b00ae2611e6"
 dependencies = [
  "async-trait",
  "lemonfiber-ports",
@@ -681,7 +684,6 @@ dependencies = [
  "schemars",
  "serde",
  "serde_json",
- "tokio",
 ]
 
 [[package]]
@@ -697,6 +699,7 @@ dependencies = [
  "lemonfiber-adapter-kit",
  "lemonfiber-contract",
  "lemonfiber-ports",
+ "lemonfiber-sidecar",
  "regex",
  "ring",
  "rustls",
@@ -717,7 +720,7 @@ dependencies = [
 [[package]]
 name = "lemonfiber-error"
 version = "0.17.0"
-source = "git+https://github.com/lemonfiber/lemonfiber?rev=0d8245e1af6579fbc5b2e186c21597475b18dc0d#0d8245e1af6579fbc5b2e186c21597475b18dc0d"
+source = "git+https://github.com/lemonfiber/lemonfiber?rev=2fee5cf8935ee541c8e6fee4e85d8b00ae2611e6#2fee5cf8935ee541c8e6fee4e85d8b00ae2611e6"
 dependencies = [
  "schemars",
  "serde",
@@ -726,7 +729,7 @@ dependencies = [
 [[package]]
 name = "lemonfiber-manifest"
 version = "0.17.0"
-source = "git+https://github.com/lemonfiber/lemonfiber?rev=0d8245e1af6579fbc5b2e186c21597475b18dc0d#0d8245e1af6579fbc5b2e186c21597475b18dc0d"
+source = "git+https://github.com/lemonfiber/lemonfiber?rev=2fee5cf8935ee541c8e6fee4e85d8b00ae2611e6#2fee5cf8935ee541c8e6fee4e85d8b00ae2611e6"
 dependencies = [
  "schemars",
  "serde",
@@ -736,9 +739,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "lemonfiber-pinned"
+version = "0.17.0"
+source = "git+https://github.com/lemonfiber/lemonfiber?rev=2fee5cf8935ee541c8e6fee4e85d8b00ae2611e6#2fee5cf8935ee541c8e6fee4e85d8b00ae2611e6"
+dependencies = [
+ "futures-util",
+ "reqwest",
+ "ring",
+ "rustls",
+]
+
+[[package]]
 name = "lemonfiber-ports"
 version = "0.17.0"
-source = "git+https://github.com/lemonfiber/lemonfiber?rev=0d8245e1af6579fbc5b2e186c21597475b18dc0d#0d8245e1af6579fbc5b2e186c21597475b18dc0d"
+source = "git+https://github.com/lemonfiber/lemonfiber?rev=2fee5cf8935ee541c8e6fee4e85d8b00ae2611e6#2fee5cf8935ee541c8e6fee4e85d8b00ae2611e6"
 dependencies = [
  "async-trait",
  "base64",
@@ -752,6 +766,26 @@ dependencies = [
  "thiserror",
  "tokio",
  "url",
+]
+
+[[package]]
+name = "lemonfiber-random"
+version = "0.17.0"
+source = "git+https://github.com/lemonfiber/lemonfiber?rev=2fee5cf8935ee541c8e6fee4e85d8b00ae2611e6#2fee5cf8935ee541c8e6fee4e85d8b00ae2611e6"
+dependencies = [
+ "getrandom 0.4.3",
+ "lemonfiber-ports",
+]
+
+[[package]]
+name = "lemonfiber-sidecar"
+version = "0.17.0"
+source = "git+https://github.com/lemonfiber/lemonfiber?rev=2fee5cf8935ee541c8e6fee4e85d8b00ae2611e6#2fee5cf8935ee541c8e6fee4e85d8b00ae2611e6"
+dependencies = [
+ "base64",
+ "ring",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

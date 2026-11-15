@@ -1,7 +1,10 @@
 use lemonfiber_ports::http::Method;
 use lemonfiber_ports::service::{Addressee, Answers, Held, Naming, Presentation, Statuses};
 
-use super::{answered, Carrying, Check, Decision, Going, Presenting, Rules, Uncompiled, REFUSED};
+use super::{
+    answered, Carrying, Check, Decision, Going, Opening, Presenting, Rules, Uncompiled, Writing,
+    REFUSED,
+};
 use crate::fixtures::{self, ITEM, OTHER, PASS, TOKEN, UPSTREAM};
 
 fn jellyfin() -> Rules {
@@ -41,20 +44,47 @@ fn going(target: &str, presenting: Presenting, check: Check) -> Decision {
         target: target.to_owned(),
         presenting,
         check,
+        pass_service: None,
+        writing: None,
+    }))
+}
+
+fn passing(target: &str, pass: &str) -> Decision {
+    passing_with(target, &[("lfpass", pass)])
+}
+
+fn writing(carried: &[(&str, &str)], session: Option<&str>) -> Writing {
+    Writing {
+        carried: carried
+            .iter()
+            .map(|(name, value)| ((*name).to_owned(), (*value).to_owned()))
+            .collect(),
+        stripped: vec!["ApiKey".to_owned(), "api_key".to_owned()],
+        session: session.map(str::to_owned),
+    }
+}
+
+fn passing_with(target: &str, written: &[(&str, &str)]) -> Decision {
+    Decision::Forward(Box::new(Going {
+        target: target.to_owned(),
+        presenting: Presenting::Unchanged,
+        check: Check::Nothing,
+        pass_service: Some(PASS.to_owned()),
+        writing: Some(writing(written, None)),
     }))
 }
 
 fn presenting_of(decision: Decision) -> Presenting {
     match decision {
         Decision::Forward(going) => going.presenting,
-        Decision::Refuse(status) => unreachable!("refused with {status}"),
+        other => unreachable!("not forwarded: {other:?}"),
     }
 }
 
 fn check_of(decision: Decision) -> Check {
     match decision {
         Decision::Forward(going) => going.check,
-        Decision::Refuse(status) => unreachable!("refused with {status}"),
+        other => unreachable!("not forwarded: {other:?}"),
     }
 }
 
@@ -330,24 +360,18 @@ fn a_live_stream_goes_on_without_its_pass_once_the_pass_service_is_asked() {
         decided(&format!(
             "/LiveTv/LiveStreamFiles/{stream}/stream.ts?a=1&lfpass=p.1.m&b=2"
         )),
-        forward(
+        passing(
             &format!("/LiveTv/LiveStreamFiles/{stream}/stream.ts?a=1&b=2"),
-            Check::Pass {
-                at: PASS.to_owned(),
-                pass: "p.1.m".to_owned(),
-            }
+            "p.1.m"
         )
     );
     assert_eq!(
         decided(&format!(
             "/LiveTv/LiveStreamFiles/{stream}/stream.m3u8?lfpass=p"
         )),
-        forward(
+        passing(
             &format!("/LiveTv/LiveStreamFiles/{stream}/stream.m3u8"),
-            Check::Pass {
-                at: PASS.to_owned(),
-                pass: "p".to_owned(),
-            }
+            "p"
         )
     );
 }
@@ -382,12 +406,9 @@ fn a_pass_longer_than_the_door_reads_is_refused() {
         decided(&format!(
             "/LiveTv/LiveStreamFiles/{stream}/stream.ts?lfpass={longest}"
         )),
-        forward(
+        passing(
             &format!("/LiveTv/LiveStreamFiles/{stream}/stream.ts"),
-            Check::Pass {
-                at: PASS.to_owned(),
-                pass: longest.clone(),
-            }
+            &longest
         )
     );
     assert_eq!(
@@ -567,6 +588,8 @@ fn a_pattern_that_does_not_compile_is_named_in_the_refusal() {
 mod adapter;
 mod differing;
 mod injecting;
+mod live;
 mod normalising;
+mod opening;
 mod querying;
 mod tokens;

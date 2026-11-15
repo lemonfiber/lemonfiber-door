@@ -1,4 +1,4 @@
-use super::{is_playlist, Origin, LINES_MOST, MOST};
+use super::{holds, is_media, is_playlist, Origin, LINES_MOST, MOST};
 
 const PASS: &str = "bWVtYmVy.1700000000.bWFj";
 
@@ -8,7 +8,8 @@ const DOOR: Origin<'static> = Origin {
 };
 
 fn written(playlist: &str, pass: &str) -> String {
-    super::written(playlist, pass, DOOR).unwrap_or_else(|| unreachable!("written"))
+    super::written(playlist, &[("lfpass", pass)], &[], DOOR)
+        .unwrap_or_else(|| unreachable!("written"))
 }
 
 #[test]
@@ -97,7 +98,12 @@ fn an_absolute_address_is_left_as_it_came_where_the_request_named_no_authority()
         authority: None,
     };
     assert_eq!(
-        super::written("http://media.home.local/a.ts\nb.ts\n", PASS, nameless),
+        super::written(
+            "http://media.home.local/a.ts\nb.ts\n",
+            &[("lfpass", PASS)],
+            &[],
+            nameless
+        ),
         Some(format!(
             "http://media.home.local/a.ts\nb.ts?lfpass={PASS}\n"
         ))
@@ -107,9 +113,9 @@ fn an_absolute_address_is_left_as_it_came_where_the_request_named_no_authority()
 #[test]
 fn a_playlist_of_more_lines_than_the_door_writes_into_is_not_written() {
     let most = "#\n".repeat(LINES_MOST);
-    assert!(super::written(&most, PASS, DOOR).is_some());
+    assert!(super::written(&most, &[("lfpass", PASS)], &[], DOOR).is_some());
     let more = format!("{most}#");
-    assert_eq!(super::written(&more, PASS, DOOR), None);
+    assert_eq!(super::written(&more, &[("lfpass", PASS)], &[], DOOR), None);
 }
 
 #[test]
@@ -119,5 +125,70 @@ fn a_playlist_that_would_grow_beyond_what_the_door_answers_is_not_written() {
     let playlist = line.repeat(lines.min(LINES_MOST));
     assert!(playlist.len() <= MOST);
     let long = "p".repeat(1024);
-    assert_eq!(super::written(&playlist, &long, DOOR), None);
+    assert_eq!(
+        super::written(&playlist, &[("lfpass", &long)], &[], DOOR),
+        None
+    );
+}
+
+#[test]
+fn a_live_stream_parameter_is_written_beside_the_pass_as_the_request_carried_it() {
+    let carried = [("lfpass", PASS), ("LiveStreamId", "a%5Fb")];
+    assert_eq!(
+        super::written(
+            "#EXTM3U\nhls1/main/0.ts?livestreamid=old&x=1\n#EXT-X-MAP:URI=\"init.mp4\"\n",
+            &carried,
+            &[],
+            DOOR
+        ),
+        Some(format!(
+            "#EXTM3U\nhls1/main/0.ts?x=1&lfpass={PASS}&LiveStreamId=a%5Fb\n#EXT-X-MAP:URI=\"init.mp4?lfpass={PASS}&LiveStreamId=a%5Fb\"\n"
+        ))
+    );
+}
+
+#[test]
+fn every_token_parameter_is_taken_off_every_address_in_any_case_once_decoded() {
+    let stripped = ["ApiKey", "api_key"];
+    assert_eq!(
+        super::written(
+            "#EXT-X-MAP:URI=\"init.mp4?ApiKey=t\"\nmain.m3u8?a=1&api_key=t\nseg.ts?APIKEY=t&x=1\nseg2.ts?api%5Fkey=t\nseg3.ts?api_keys=t\nhttps://elsewhere.example/off.ts?api_key=t\n",
+            &[("lfpass", PASS)],
+            &stripped,
+            DOOR
+        ),
+        Some(format!(
+            "#EXT-X-MAP:URI=\"init.mp4?lfpass={PASS}\"\nmain.m3u8?a=1&lfpass={PASS}\nseg.ts?x=1&lfpass={PASS}\nseg2.ts?lfpass={PASS}\nseg3.ts?api_keys=t&lfpass={PASS}\nhttps://elsewhere.example/off.ts?api_key=t\n"
+        ))
+    );
+}
+
+#[test]
+fn only_a_type_media_alone_is_served_as_is_media() {
+    for kind in [
+        "video/mp2t",
+        "Audio/AAC",
+        "image/jpeg; q=1",
+        "application/octet-stream",
+        "application/mp4",
+    ] {
+        assert!(is_media(kind), "{kind}");
+    }
+    for kind in [
+        "text/vtt",
+        "image/svg+xml",
+        "application/json",
+        "video/x+json",
+        "",
+    ] {
+        assert!(!is_media(kind), "{kind}");
+    }
+}
+
+#[test]
+fn a_secret_is_found_anywhere_in_any_case() {
+    assert!(holds(b"x=ABCDEF&y", "abcdef"));
+    assert!(holds(b"abcdef", "abcdef"));
+    assert!(!holds(b"abcde", "abcdef"));
+    assert!(holds(b"", ""));
 }

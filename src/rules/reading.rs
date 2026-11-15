@@ -132,7 +132,7 @@ impl Rules {
 
     /// Whether `value` is a token of the declared shape that every reader reads as one: no
     /// comma a list of values is split at, and no space or other control a reader trims.
-    fn shaped(&self, value: &str) -> bool {
+    pub(super) fn shaped(&self, value: &str) -> bool {
         self.token.is_match(value)
             && !value
                 .bytes()
@@ -141,7 +141,7 @@ impl Rules {
 
     /// Every query parameter a member's token reaches the media server in: those the
     /// declaration says it also reads one from, and the one it is presented in.
-    pub(super) fn token_parameters(&self) -> impl Iterator<Item = &str> {
+    pub(crate) fn token_parameters(&self) -> impl Iterator<Item = &str> {
         let token = &self.guarded.declared.token;
         let presented = match &token.presented {
             Presentation::Query { parameter } => Some(parameter.as_str()),

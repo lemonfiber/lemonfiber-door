@@ -40,6 +40,8 @@ fn a_token_holding_a_comma_or_a_space_is_refused_whatever_its_shape_allows() {
             target: "/Users".to_owned(),
             presenting: super::Presenting::Unchanged,
             check: Check::Nothing,
+            pass_service: None,
+            writing: None,
         }))
     );
 }

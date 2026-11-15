@@ -365,6 +365,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "getrandom"
+version = "0.4.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "300e883d756b2e4ec94e02791f39b04b522276138852cfc41d9fb7e904106099"
+dependencies = [
+ "cfg-if",
+ "libc",
+ "r-efi",
+]
+
+[[package]]
 name = "h2"
 version = "0.4.20"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -690,14 +701,17 @@ checksum = "20870f649af7073d53e38067b2a84312175d56ea15217e1b15bc83506ec50afb"
 [[package]]
 name = "lemonfiber-adapter-kit"
 version = "0.17.0"
-source = "git+https://github.com/lemonfiber/lemonfiber?rev=0d8245e1af6579fbc5b2e186c21597475b18dc0d#0d8245e1af6579fbc5b2e186c21597475b18dc0d"
+source = "git+https://github.com/lemonfiber/lemonfiber?rev=2fee5cf8935ee541c8e6fee4e85d8b00ae2611e6#2fee5cf8935ee541c8e6fee4e85d8b00ae2611e6"
 dependencies = [
  "async-trait",
  "axum",
  "form_urlencoded",
+ "futures-util",
  "lemonfiber-contract",
  "lemonfiber-error",
+ "lemonfiber-pinned",
  "lemonfiber-ports",
+ "lemonfiber-random",
  "reqwest",
  "rustix",
  "rustls",
@@ -710,7 +724,7 @@ dependencies = [
 [[package]]
 name = "lemonfiber-contract"
 version = "0.17.0"
-source = "git+https://github.com/lemonfiber/lemonfiber?rev=0d8245e1af6579fbc5b2e186c21597475b18dc0d#0d8245e1af6579fbc5b2e186c21597475b18dc0d"
+source = "git+https://github.com/lemonfiber/lemonfiber?rev=2fee5cf8935ee541c8e6fee4e85d8b00ae2611e6#2fee5cf8935ee541c8e6fee4e85d8b00ae2611e6"
 dependencies = [
  "async-trait",
  "lemonfiber-ports",
@@ -718,7 +732,6 @@ dependencies = [
  "schemars",
  "serde",
  "serde_json",
- "tokio",
 ]
 
 [[package]]
@@ -734,6 +747,7 @@ dependencies = [
  "lemonfiber-adapter-kit",
  "lemonfiber-contract",
  "lemonfiber-ports",
+ "lemonfiber-sidecar",
  "rcgen",
  "regex",
  "ring",
@@ -746,7 +760,7 @@ dependencies = [
 [[package]]
 name = "lemonfiber-error"
 version = "0.17.0"
-source = "git+https://github.com/lemonfiber/lemonfiber?rev=0d8245e1af6579fbc5b2e186c21597475b18dc0d#0d8245e1af6579fbc5b2e186c21597475b18dc0d"
+source = "git+https://github.com/lemonfiber/lemonfiber?rev=2fee5cf8935ee541c8e6fee4e85d8b00ae2611e6#2fee5cf8935ee541c8e6fee4e85d8b00ae2611e6"
 dependencies = [
  "schemars",
  "serde",
@@ -755,7 +769,7 @@ dependencies = [
 [[package]]
 name = "lemonfiber-manifest"
 version = "0.17.0"
-source = "git+https://github.com/lemonfiber/lemonfiber?rev=0d8245e1af6579fbc5b2e186c21597475b18dc0d#0d8245e1af6579fbc5b2e186c21597475b18dc0d"
+source = "git+https://github.com/lemonfiber/lemonfiber?rev=2fee5cf8935ee541c8e6fee4e85d8b00ae2611e6#2fee5cf8935ee541c8e6fee4e85d8b00ae2611e6"
 dependencies = [
  "schemars",
  "serde",
@@ -765,9 +779,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "lemonfiber-pinned"
+version = "0.17.0"
+source = "git+https://github.com/lemonfiber/lemonfiber?rev=2fee5cf8935ee541c8e6fee4e85d8b00ae2611e6#2fee5cf8935ee541c8e6fee4e85d8b00ae2611e6"
+dependencies = [
+ "futures-util",
+ "reqwest",
+ "ring",
+ "rustls",
+]
+
+[[package]]
 name = "lemonfiber-ports"
 version = "0.17.0"
-source = "git+https://github.com/lemonfiber/lemonfiber?rev=0d8245e1af6579fbc5b2e186c21597475b18dc0d#0d8245e1af6579fbc5b2e186c21597475b18dc0d"
+source = "git+https://github.com/lemonfiber/lemonfiber?rev=2fee5cf8935ee541c8e6fee4e85d8b00ae2611e6#2fee5cf8935ee541c8e6fee4e85d8b00ae2611e6"
 dependencies = [
  "async-trait",
  "base64",
@@ -781,6 +806,26 @@ dependencies = [
  "thiserror",
  "tokio",
  "url",
+]
+
+[[package]]
+name = "lemonfiber-random"
+version = "0.17.0"
+source = "git+https://github.com/lemonfiber/lemonfiber?rev=2fee5cf8935ee541c8e6fee4e85d8b00ae2611e6#2fee5cf8935ee541c8e6fee4e85d8b00ae2611e6"
+dependencies = [
+ "getrandom 0.4.3",
+ "lemonfiber-ports",
+]
+
+[[package]]
+name = "lemonfiber-sidecar"
+version = "0.17.0"
+source = "git+https://github.com/lemonfiber/lemonfiber?rev=2fee5cf8935ee541c8e6fee4e85d8b00ae2611e6#2fee5cf8935ee541c8e6fee4e85d8b00ae2611e6"
+dependencies = [
+ "base64",
+ "ring",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
@@ -985,6 +1030,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "r-efi"
+version = "6.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f8dcc9c7d52a811697d2151c701e0d08956f92b0e24136cf4cf27b57a6a0d9bf"
+
+[[package]]
 name = "rcgen"
 version = "0.14.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1093,7 +1144,7 @@ checksum = "a4689e6c2294d81e88dc6261c768b63bc4fcdb852be6d1352498b114f61383b7"
 dependencies = [
  "cc",
  "cfg-if",
- "getrandom",
+ "getrandom 0.2.17",
  "libc",
  "untrusted",
  "windows-sys 0.52.0",
