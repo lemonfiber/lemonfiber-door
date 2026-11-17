@@ -16,6 +16,7 @@ async fn transcoding() -> (Running, Fake, Fake) {
         pattern: "(?i)^/Videos/[^/]+/(?:(?:live|master|main)\\.m3u8$|hls1?/)".to_owned(),
         parameter: Some("LiveStreamId".to_owned()),
         stream: "^[0-9a-f]{32}_[0-9a-f]{32}_[0-9a-f]{32}$".to_owned(),
+        bound: Vec::new(),
     });
     let door = running(Some(guarded), Duration::from_secs(1)).await;
     (door, upstream, pass)
