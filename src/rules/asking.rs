@@ -28,13 +28,6 @@ impl Rules {
         ignoring: Option<&str>,
     ) -> Result<Check, u16> {
         let path = target.path;
-        let split_otherwise = target.query.is_some_and(|query| query.contains(';'));
-        if path.contains('%')
-            || split_otherwise
-            || pairs.iter().any(|pair| !super::plain(pair.name))
-        {
-            return Err(REFUSED);
-        }
         let item = match &bytes.query {
             None => bytes
                 .pattern

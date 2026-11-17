@@ -78,13 +78,24 @@ enum Naming {
     Asked(Regex),
 }
 
-/// A path that serves a live stream's bytes, compiled, and the query parameter it finds
-/// the live stream in where its path does not hold it.
+/// A path that serves a live stream's bytes, compiled, the query parameter it finds the
+/// live stream in where its path does not hold it, and the further parameters that have
+/// to name the same live stream.
 #[derive(Debug)]
 struct Live {
     pattern: Regex,
     parameter: Option<String>,
     stream: Regex,
+    bound: Vec<(String, Regex)>,
+}
+
+impl Live {
+    /// Whether `parameter`, in any case, is one this path binds to its live stream.
+    fn binds(&self, parameter: &str) -> bool {
+        self.bound
+            .iter()
+            .any(|(bound, _)| bound.eq_ignore_ascii_case(parameter))
+    }
 }
 
 /// A guard's envelope, compiled into what it decides with.
@@ -266,6 +277,11 @@ impl Rules {
                     pattern: from_start(&path.pattern)?,
                     parameter: path.parameter.clone(),
                     stream: whole(&path.stream)?,
+                    bound: path
+                        .bound
+                        .iter()
+                        .map(|bound| Ok((bound.parameter.clone(), whole(&bound.pattern)?)))
+                        .collect::<Result<_, Uncompiled>>()?,
                 })
             })
             .collect::<Result<_, Uncompiled>>()?;
@@ -320,7 +336,7 @@ impl Rules {
                     .is_none_or(|parameter| carries(&pairs, parameter))
         };
         if let Some(live) = self.live.iter().find(covering) {
-            if !reading {
+            if !reading || !canonical(target, &pairs) {
                 return Decision::Refuse(REFUSED);
             }
             return match self.lived(live, target, &decoded, &pairs, read) {
@@ -339,7 +355,10 @@ impl Rules {
             };
         }
         if let Some(bytes) = self.bytes.iter().find(|bytes| either(&bytes.pattern)) {
-            if bytes.exempt.iter().any(either) && !target.path.contains('%') {
+            if !canonical(target, &pairs) {
+                return Decision::Refuse(REFUSED);
+            }
+            if bytes.exempt.iter().any(either) {
                 return Decision::Forward(Box::new(Going {
                     target: forwarded(),
                     presenting,
@@ -411,19 +430,36 @@ impl Rules {
             .iter()
             .filter(|bytes| either(&bytes.pattern))
             .flat_map(|bytes| &bytes.naming)
-            .any(|(parameter, _)| !own(parameter) && carries(pairs, parameter));
+            .any(|(parameter, _)| {
+                !own(parameter) && !live.binds(parameter) && carries(pairs, parameter)
+            });
         let written = Self::passable(live, target, pairs)
             .filter(|_| !naming_another)
             .ok_or(REFUSED)?;
         let Some(parameter) = &live.parameter else {
             return Ok((Check::Nothing, written));
         };
-        let bytes = self
-            .bytes
-            .iter()
-            .find(|bytes| either(&bytes.pattern))
-            .filter(|bytes| !bytes.exempt.iter().any(either) && read.token.is_some())
-            .ok_or(REFUSED)?;
+        let in_path = live
+            .pattern
+            .captures(target.path)
+            .is_some_and(|captured| captured.name(STREAM_NAME).is_some());
+        let Some(bytes) = self.bytes.iter().find(|bytes| either(&bytes.pattern)) else {
+            return if in_path {
+                Ok((Check::Nothing, written))
+            } else {
+                Err(REFUSED)
+            };
+        };
+        if bytes
+            .query
+            .as_ref()
+            .is_some_and(|query| live.binds(&query.parameter))
+        {
+            return Ok((Check::Nothing, written));
+        }
+        if bytes.exempt.iter().any(either) || read.token.is_none() {
+            return Err(REFUSED);
+        }
         Ok((
             self.asked(bytes, target, pairs, read, Some(parameter))?,
             written,
@@ -485,23 +521,39 @@ impl Rules {
         pairs: &[Pair<'_>],
     ) -> Option<Vec<(String, String)>> {
         let shaped = |stream: &str| live.stream.is_match(stream);
-        let plain_names = !target.path.contains('%') && pairs.iter().all(|pair| plain(pair.name));
-        let pass = carried(pairs).filter(|_| plain_names)?;
+        let pass = carried(pairs)?;
         let mut written = vec![(PASS.to_owned(), pass.to_owned())];
-        match &live.parameter {
+        let stream = match &live.parameter {
             None => live
                 .pattern
-                .captures(target.path)
-                .and_then(|captured| captured.name(STREAM_NAME))
-                .filter(|stream| shaped(stream.as_str()))
-                .map(|_| written),
+                .captures(target.path)?
+                .name(STREAM_NAME)?
+                .as_str()
+                .to_owned(),
             Some(parameter) => {
-                valued(parameter, pairs).filter(|stream| shaped(stream))?;
+                let stream = valued(parameter, pairs)?;
+                let in_path = live
+                    .pattern
+                    .captures(target.path)
+                    .and_then(|captured| captured.name(STREAM_NAME))
+                    .map(|named| named.as_str() == stream);
+                if in_path == Some(false) {
+                    return None;
+                }
                 let named = pairs.iter().find(|pair| pair.name == parameter)?;
                 written.push((parameter.clone(), named.value?.to_owned()));
-                Some(written)
+                stream
             }
-        }
+        };
+        let agreed = live.bound.iter().all(|(parameter, value)| {
+            valued(parameter, pairs).is_some_and(|carried| {
+                value
+                    .captures(&carried)
+                    .and_then(|captured| captured.name(STREAM_NAME))
+                    .is_some_and(|named| named.as_str() == stream)
+            })
+        });
+        (shaped(&stream) && agreed).then_some(written)
     }
 }
 
@@ -611,6 +663,14 @@ fn bearer(header: &[u8]) -> Option<&str> {
         .eq_ignore_ascii_case(BEARER)
         .then(|| text.get(BEARER.len()..))
         .flatten()
+}
+
+/// Whether `target`, its query split into `pairs`, is read one way alone: its path holds
+/// no `%`, its query no `;` a reader may split it at, and every parameter name is plain.
+fn canonical(target: Target<'_>, pairs: &[Pair<'_>]) -> bool {
+    !target.path.contains('%')
+        && !target.query.is_some_and(|query| query.contains(';'))
+        && pairs.iter().all(|pair| plain(pair.name))
 }
 
 /// Whether `name` is a plain parameter name: ASCII letters, digits, `_`, `-` and `.`.

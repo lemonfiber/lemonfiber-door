@@ -78,6 +78,7 @@ pub(crate) fn declared() -> Declared {
             pattern: format!("{PREFIXED}/LiveTv/LiveStreamFiles/(?P<stream>[^/]+)/stream\\."),
             parameter: None,
             stream: HEX.to_owned(),
+            bound: Vec::new(),
         }],
         refused: vec![
             format!("{PREFIXED}/(?:Artists|Genres|MusicGenres|Persons|Studios)/[^/]+/Images(?:/|$)"),
