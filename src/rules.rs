@@ -323,9 +323,6 @@ impl Rules {
         };
         let bearer = read.bearer;
         let either = |pattern: &Regex| pattern.is_match(target.path) || pattern.is_match(&decoded);
-        if self.refused.iter().any(either) {
-            return Decision::Refuse(REFUSED);
-        }
         let forwarded = || forwarded(target, &pairs, self.put(bearer));
         let reading = READING.contains(&method);
         let covering = |live: &&Live| {
@@ -353,6 +350,9 @@ impl Rules {
                 })),
                 Err(status) => Decision::Refuse(status),
             };
+        }
+        if self.refused.iter().any(either) {
+            return Decision::Refuse(REFUSED);
         }
         if let Some(bytes) = self.bytes.iter().find(|bytes| either(&bytes.pattern)) {
             if !canonical(target, &pairs) {

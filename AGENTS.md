@@ -40,6 +40,10 @@ See the spec:
   `lfpass` taken off and a token put in the query where the declaration says.
 - **It names no media server's routes.** What it enforces is the declaration in the
   envelope; nothing here knows Jellyfin.
+- **A live-stream path decides before a refused one.** A request a live-stream path
+  covers goes on only on a pass for the live stream it names, even where a refused path
+  matches it too; every other request a refused path matches is answered `403` before
+  anything is asked (`ARCH-R444`).
 - **It believes `X-Forwarded-For` from the envelope's `proxy` alone**, takes that
   proxy's rightmost entry, and tells the media server that one client.
 - **A session the pass service hands it goes only into the question and the request it

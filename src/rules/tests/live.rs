@@ -369,3 +369,59 @@ fn a_request_read_more_than_one_way_is_refused_on_a_live_path_an_item_path_or_an
         assert_eq!(bearing(&raw), Decision::Refuse(REFUSED), "{raw}");
     }
 }
+
+const LIVE_SESSION: &str = "/livetv/sessions/0f2a6c1e-8b3d-4e5f-9a7b-1c2d3e4f5a6b/c1";
+
+fn refusing_a_live_route() -> Rules {
+    let uuid = "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}";
+    let mut declared = fixtures::declared();
+    declared.refused.push("(?i)^/livetv(?:/|$)".to_owned());
+    declared.live.push(LivePath {
+        pattern: format!(
+            "(?i)^/livetv/sessions/(?P<stream>{uuid})/[0-9a-z]{{1,64}}/(?:index\\.m3u8|[0-9a-z]{{1,64}}\\.ts)$"
+        ),
+        parameter: None,
+        stream: format!("^{uuid}$"),
+        bound: Vec::new(),
+    });
+    Rules::of(fixtures::guarded(declared)).unwrap_or_else(|why| unreachable!("{why:?}"))
+}
+
+#[test]
+fn a_live_stream_path_decides_a_request_a_refused_path_matches_too() {
+    for file in ["index.m3u8", "segment7.ts"] {
+        let at = format!("{LIVE_SESSION}/{file}");
+        assert_eq!(
+            refusing_a_live_route().decide("GET", &format!("{at}?lfpass=p"), &[], &[]),
+            passing(&at, "p"),
+            "{at}"
+        );
+        assert_eq!(
+            refusing_a_live_route().decide("GET", &at, &[], &[]),
+            Decision::Refuse(REFUSED),
+            "{at}"
+        );
+    }
+}
+
+#[test]
+fn a_path_a_refused_path_matches_and_no_live_stream_path_covers_is_refused() {
+    for raw in [
+        format!("{LIVE_SESSION}/extra.bin?lfpass=p"),
+        format!("{LIVE_SESSION}/index.m3u8/more?lfpass=p"),
+        format!("{LIVE_SESSION}/../c2/index.m3u8?lfpass=p"),
+        format!("{LIVE_SESSION}%2Findex.m3u8?lfpass=p"),
+        format!("{LIVE_SESSION}/index%2em3u8?lfpass=p"),
+        "/livetv/sessions/0f2a6c1e-8b3d-4e5f-9a7b-1c2d3e4f5a6b?lfpass=p".to_owned(),
+        "/livetv/sessions/not-a-session/c1/index.m3u8?lfpass=p".to_owned(),
+        "/livetv/dvrs/1/channels/2/tune".to_owned(),
+        "/LiveTV".to_owned(),
+        "/Artists/Someone/Images/Primary".to_owned(),
+    ] {
+        assert_eq!(
+            refusing_a_live_route().decide("GET", &raw, &[], &[]),
+            Decision::Refuse(REFUSED),
+            "{raw}"
+        );
+    }
+}

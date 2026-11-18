@@ -96,6 +96,28 @@ pub(crate) async fn pass_service() -> Fake {
     started(Kind::Pass).await
 }
 
+/// A port of this machine held bound and never listened on, so nothing answers a
+/// connection to it for as long as it is held and no other test is handed it meanwhile.
+pub(crate) struct Unanswering {
+    /// Where it is.
+    pub(crate) at: SocketAddr,
+    _held: tokio::net::TcpSocket,
+}
+
+/// An address nothing answers at while it is held.
+pub(crate) fn unanswering() -> Unanswering {
+    let held = tokio::net::TcpSocket::new_v4()
+        .and_then(|socket| {
+            socket.bind(SocketAddr::from(([127, 0, 0, 1], 0)))?;
+            Ok(socket)
+        })
+        .unwrap_or_else(|why| unreachable!("a port is bound: {why}"));
+    let at = held
+        .local_addr()
+        .unwrap_or_else(|why| unreachable!("a bound port has an address: {why}"));
+    Unanswering { at, _held: held }
+}
+
 /// An address nothing listens on.
 pub(crate) async fn nobody() -> SocketAddr {
     let listener = TcpListener::bind("127.0.0.1:0").await;

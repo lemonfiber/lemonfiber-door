@@ -275,10 +275,11 @@ async fn a_live_stream_goes_on_without_its_pass_only_where_the_pass_service_says
 #[tokio::test]
 async fn a_pass_service_not_answering_is_a_refusal() {
     let upstream = fake::media_server().await;
+    let unanswering = fake::unanswering();
     let door = running(
         Some(envelope(
             &upstream,
-            &format!("http://{}/pass", fake::nobody().await),
+            &format!("http://{}/pass", unanswering.at),
             "10.80.96.3",
         )),
         Duration::from_secs(1),

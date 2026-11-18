@@ -68,7 +68,8 @@ async fn a_pass_the_pass_service_opens_no_session_for_is_refused_without_asking_
 #[tokio::test]
 async fn a_pass_service_not_answering_opens_nothing() {
     let upstream = fake::media_server().await;
-    let at = format!("http://{}/pass", fake::nobody().await);
+    let unanswering = fake::unanswering();
+    let at = format!("http://{}/pass", unanswering.at);
     let door = running(
         Some(envelope(&upstream, &at, "10.80.96.3")),
         Duration::from_secs(1),
