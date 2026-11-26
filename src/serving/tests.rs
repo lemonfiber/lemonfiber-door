@@ -702,8 +702,7 @@ async fn an_adapter_that_could_not_ask_or_finds_no_session_refuses_the_request()
 #[tokio::test]
 async fn a_header_read_as_no_token_reaches_the_upstreams_question_as_it_reaches_the_upstream() {
     let client = format!(r#"Authorization: MediaBrowser Client="x", Device="y", Token="{OTHER}""#);
-    let unshaped = "Authorization: Bearer not-a-token".to_owned();
-    for header in [client, unshaped] {
+    for header in [client, "Authorization: Basic eA==".to_owned()] {
         let upstream = fake::media_server().await;
         let door = running(
             Some(envelope(&upstream, "http://127.0.0.1:1/pass", "10.80.96.3")),
@@ -732,7 +731,7 @@ async fn a_header_read_as_no_token_reaches_the_upstreams_question_as_it_reaches_
 async fn a_header_read_as_no_token_is_refused_where_the_adapter_is_asked() {
     for header in [
         format!(r#"Authorization: MediaBrowser Client="x", Token="{OTHER}""#),
-        "Authorization: Bearer not-a-token".to_owned(),
+        "Authorization: Basic eA==".to_owned(),
     ] {
         let upstream = fake::media_server().await;
         let adapter = fake::media_server().await;
@@ -745,6 +744,45 @@ async fn a_header_read_as_no_token_is_refused_where_the_adapter_is_asked() {
         assert_eq!(get(door.at, &target, &[&header]).await.0, 403, "{header}");
         assert!(adapter.sent().is_empty(), "{header}");
         assert!(upstream.sent().is_empty(), "{header}");
+    }
+}
+
+#[tokio::test]
+async fn a_bearer_value_that_is_not_a_member_token_reaches_nothing_on_any_path() {
+    let foreign = [
+        "Authorization: Bearer not-a-token".to_owned(),
+        "Authorization: Bearer short".to_owned(),
+        "Authorization: Bearer".to_owned(),
+        format!("Authorization: Bearer  {TOKEN}"),
+        format!("Authorization: Bearer {TOKEN},{OTHER}"),
+        format!("Authorization: Bearer\t{TOKEN}"),
+        format!("Authorization: bEaReR={TOKEN}"),
+    ];
+    let targets = [
+        format!("/Videos/{ITEM}/stream"),
+        "/Videos/ActiveEncodings".to_owned(),
+        "/Users".to_owned(),
+    ];
+    for adapter_asked in [false, true] {
+        for header in &foreign {
+            let upstream = fake::media_server().await;
+            let adapter = fake::media_server().await;
+            let guarded = if adapter_asked {
+                asking_its_adapter(&upstream, &adapter)
+            } else {
+                envelope(&upstream, "http://127.0.0.1:1/pass", "10.80.96.3")
+            };
+            let door = running(Some(guarded), Duration::from_secs(1)).await;
+            for target in &targets {
+                assert_eq!(
+                    get(door.at, target, &[header]).await.0,
+                    403,
+                    "{target} {header}"
+                );
+            }
+            assert!(upstream.sent().is_empty(), "{header}");
+            assert!(adapter.sent().is_empty(), "{header}");
+        }
     }
 }
 

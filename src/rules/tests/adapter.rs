@@ -240,3 +240,21 @@ fn a_space_spelled_as_none_is_is_never_put_in_the_adapter_question() {
         );
     }
 }
+
+#[test]
+fn a_bearer_value_that_is_not_a_member_token_is_refused_before_the_adapter_is_asked() {
+    for raw in [
+        format!("/Videos/{ITEM}/stream"),
+        format!("/Items/{ITEM}/Images/Primary"),
+        "/Users".to_owned(),
+    ] {
+        for authorization in super::tokens::foreign_bearers() {
+            assert_eq!(
+                jellyfin().decide("GET", &raw, &[authorization.as_slice()], &[]),
+                Decision::Refuse(REFUSED),
+                "{raw} {}",
+                String::from_utf8_lossy(&authorization)
+            );
+        }
+    }
+}

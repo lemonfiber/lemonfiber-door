@@ -84,12 +84,10 @@ fn a_token_is_held_to_its_whole_shape_whatever_the_declaration_anchors() {
         Decision::Refuse(REFUSED)
     );
     let unshaped = format!("Bearer {TOKEN}&item=7");
-    let decision = rules.decide("GET", &stream(), &[unshaped.as_bytes()], &[]);
-    let Decision::Forward(going) = decision.clone() else {
-        unreachable!("refused: {decision:?}");
-    };
-    assert_eq!(going.target, stream());
-    assert_eq!(asked_of(decision), vec![format!("/Items/{ITEM}")]);
+    assert_eq!(
+        rules.decide("GET", &stream(), &[unshaped.as_bytes()], &[]),
+        Decision::Refuse(REFUSED)
+    );
 }
 
 #[test]

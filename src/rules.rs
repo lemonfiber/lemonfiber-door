@@ -655,6 +655,17 @@ fn forwarded(target: Target<'_>, pairs: &[Pair<'_>], put: Option<(&str, &str)>) 
     }
 }
 
+/// Whether an `Authorization` header names the bearer scheme: its first word, after any
+/// leading space and up to the first byte that is no letter or digit, is `bearer` in any
+/// case, however what follows it is written.
+fn names_bearer(header: &[u8]) -> bool {
+    header
+        .trim_ascii_start()
+        .split(|byte| !byte.is_ascii_alphanumeric())
+        .next()
+        .is_some_and(|scheme| scheme.eq_ignore_ascii_case(BEARER.trim_end().as_bytes()))
+}
+
 /// The token an `Authorization` header presents as a bearer, where it does.
 fn bearer(header: &[u8]) -> Option<&str> {
     let text = std::str::from_utf8(header).ok()?;

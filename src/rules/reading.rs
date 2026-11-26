@@ -2,11 +2,12 @@
 //! one from: the bearer header, the header the token is presented in, each token query
 //! parameter and each token header. The same token in several of them is one token;
 //! different tokens, one place carrying a token twice, another spelling and another shape
-//! are refused, so the media server can act only as the token the door read.
+//! are refused, and so is anything after `Bearer` but a token of the declared shape, so
+//! the media server can act only as the token the door read.
 
 use lemonfiber_ports::service::{Presentation, TOKEN};
 
-use super::{bearer, Presenting, Rules, AUTHORIZATION, DECODED_OTHERWISE};
+use super::{bearer, names_bearer, Presenting, Rules, AUTHORIZATION, DECODED_OTHERWISE};
 use crate::target::Pair;
 
 /// A request's member token, as the door read it.
@@ -38,7 +39,9 @@ impl Rules {
 
     /// The member's token the request carries, and how a bearer token is presented to
     /// the media server; nothing where it carries different tokens, one place a token
-    /// twice, a token parameter under another spelling, or a token in another shape.
+    /// twice, a token parameter under another spelling, a token in another shape, or an
+    /// `Authorization` header naming the bearer scheme with anything but a token of the
+    /// declared shape after it.
     pub(super) fn read<'a>(
         &self,
         authorization: &[&'a [u8]],
@@ -65,8 +68,8 @@ impl Rules {
             tokens.push(value);
         }
         let bearer = match authorization {
-            [] => None,
-            [one] => bearer(one).filter(|value| self.shaped(value)),
+            [one] if names_bearer(one) => Some(bearer(one).filter(|value| self.shaped(value))?),
+            [] | [_] => None,
             _ => return None,
         };
         tokens.extend(bearer);

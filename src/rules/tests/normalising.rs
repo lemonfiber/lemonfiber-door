@@ -36,13 +36,7 @@ fn a_token_holding_a_comma_or_a_space_is_refused_whatever_its_shape_allows() {
     let bearer = format!("Bearer {TOKEN} x");
     assert_eq!(
         rules.decide("GET", "/Users", &[bearer.as_bytes()], &[]),
-        Decision::Forward(Box::new(super::Going {
-            target: "/Users".to_owned(),
-            presenting: super::Presenting::Unchanged,
-            check: Check::Nothing,
-            pass_service: None,
-            writing: None,
-        }))
+        Decision::Refuse(REFUSED)
     );
 }
 
