@@ -306,12 +306,24 @@ fn a_bearer_token_is_presented_as_the_declaration_says() {
 }
 
 #[test]
-fn a_bearer_value_of_another_shape_or_another_scheme_is_left_as_it_came() {
+fn a_bearer_value_of_another_shape_is_refused_and_another_scheme_left_as_it_came() {
+    for authorization in ["Bearer short".to_owned(), format!("Bearer  {TOKEN}")] {
+        assert_eq!(
+            bearing(&format!("/Videos/{ITEM}/stream"), &[&authorization]),
+            Decision::Refuse(REFUSED),
+            "{authorization}"
+        );
+    }
+    let invalid: &[u8] = b"Bearer \xff";
+    assert_eq!(
+        jellyfin().decide("GET", "/Users", &[invalid], &[]),
+        Decision::Refuse(REFUSED)
+    );
     for authorization in [
-        "Bearer short".to_owned(),
-        format!("Bearer  {TOKEN}"),
         format!(r#"MediaBrowser Token="{TOKEN}""#),
         "Bear".to_owned(),
+        format!("Bearers {TOKEN}"),
+        "Basic eA==".to_owned(),
     ] {
         assert_eq!(
             presenting_of(bearing(
@@ -322,11 +334,6 @@ fn a_bearer_value_of_another_shape_or_another_scheme_is_left_as_it_came() {
             "{authorization}"
         );
     }
-    let invalid: &[u8] = b"Bearer \xff";
-    assert_eq!(
-        presenting_of(jellyfin().decide("GET", "/Users", &[invalid], &[])),
-        Presenting::Unchanged
-    );
 }
 
 #[test]

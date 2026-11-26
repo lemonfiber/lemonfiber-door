@@ -109,3 +109,87 @@ fn a_client_header_the_template_does_not_hold_asks_as_itself_on_an_upstream_ques
         Check::Question { .. }
     ));
 }
+
+/// Every value after `Bearer` that is not a member token: malformed, short, long, absent,
+/// two spaces, a comma, a control byte, a tab, a leading space, `=` for the space, the
+/// scheme run on into other bytes, a trailing space and bytes that are not text.
+pub(super) fn foreign_bearers() -> Vec<Vec<u8>> {
+    let mut foreign: Vec<Vec<u8>> = [
+        "Bearer not-a-token".to_owned(),
+        "Bearer short".to_owned(),
+        format!("Bearer {TOKEN}0"),
+        "Bearer".to_owned(),
+        "Bearer ".to_owned(),
+        format!("Bearer  {TOKEN}"),
+        format!("Bearer {TOKEN},{OTHER}"),
+        format!("Bearer {TOKEN},"),
+        format!("Bearer {TOKEN}\u{1}"),
+        format!("Bearer\t{TOKEN}"),
+        format!(" Bearer {TOKEN}"),
+        format!("bEaReR={TOKEN}"),
+        format!("Bearer-ish {TOKEN}"),
+        format!("Bearer {TOKEN} "),
+    ]
+    .into_iter()
+    .map(String::into_bytes)
+    .collect();
+    foreign.push(b"Bearer \xff".to_vec());
+    foreign
+}
+
+/// A target on every class of path the fixture declares: a byte path asked about, one
+/// it exempts, one carrying a pass, a live-stream path, a refused path and a path no
+/// declaration covers.
+fn every_path() -> Vec<String> {
+    vec![
+        stream(),
+        "/Videos/ActiveEncodings".to_owned(),
+        format!("{}?lfpass=a-pass", stream()),
+        format!("/LiveTv/LiveStreamFiles/{ITEM}/stream.ts?lfpass=a-pass"),
+        "/Branding/Splashscreen".to_owned(),
+        "/Users".to_owned(),
+        "/Users/AuthenticateByName".to_owned(),
+    ]
+}
+
+#[test]
+fn a_bearer_value_that_is_not_a_member_token_is_refused_on_every_path() {
+    for rules in [jellyfin(), plex()] {
+        for raw in every_path() {
+            for method in ["GET", "POST"] {
+                for authorization in foreign_bearers() {
+                    assert_eq!(
+                        rules.decide(method, &raw, &[authorization.as_slice()], &[]),
+                        Decision::Refuse(REFUSED),
+                        "{method} {raw} {}",
+                        String::from_utf8_lossy(&authorization)
+                    );
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn a_member_token_after_bearer_goes_on_where_the_path_lets_it() {
+    for bearer in [
+        format!("Bearer {TOKEN}"),
+        format!("bearer {TOKEN}"),
+        format!("BEARER {TOKEN}"),
+    ] {
+        for raw in [
+            stream(),
+            "/Videos/ActiveEncodings".to_owned(),
+            "/Users".to_owned(),
+        ] {
+            assert!(
+                goes(&jellyfin().decide("GET", &raw, &[bearer.as_bytes()], &[])),
+                "{raw} {bearer}"
+            );
+            assert!(
+                goes(&plex().decide("GET", &raw, &[bearer.as_bytes()], &[])),
+                "{raw} {bearer}"
+            );
+        }
+    }
+}

@@ -56,7 +56,10 @@ See the spec:
 - **A request carries one member's token**: it is read from the bearer header, the
   header it is presented in, each token parameter and each token header the declaration
   names; the same token in several of them is one token, and different tokens, one place
-  carrying a token twice, another spelling and another shape are refused. A value in the
+  carrying a token twice, another spelling and another shape are refused. An
+  `Authorization` header naming the bearer scheme, in any case and after any leading
+  space, with anything but one space and a token of the declared shape after it is
+  refused on every path, and nothing is asked or forwarded. A value in the
   presentation header its template does not hold is no token where the question goes to
   the media server, and refused where it goes to the adapter.
 - **An item found in a query value is read decoded once**: the parameter carried once
